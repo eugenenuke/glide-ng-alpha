@@ -1824,7 +1824,7 @@ bool VulkanBackend::SwapBuffers() {
     GLIDE_LOG(DEBUG, "Vulkan",
               "SwapBuffers: Headless - Resetting fence for slot "
                   << m_currentFrameSlot << "...");
-    m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
+    (void)m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
 
     GLIDE_LOG(DEBUG, "Vulkan",
               "SwapBuffers: Headless - Submitting command buffer...");
@@ -2250,13 +2250,7 @@ bool VulkanBackend::CreateLogicalDevice() {
       static_cast<uint32_t>(deviceExtensions.size()));
   deviceInfo.setPpEnabledExtensionNames(deviceExtensions.data());
 
-  if (enableValidationLayers) {
-    deviceInfo.setEnabledLayerCount(
-        static_cast<uint32_t>(validationLayers.size()));
-    deviceInfo.setPpEnabledLayerNames(validationLayers.data());
-  } else {
-    deviceInfo.setEnabledLayerCount(0);
-  }
+
 
   m_device = m_physicalDevice.createDeviceUnique(deviceInfo);
   m_graphicsQueue = m_device->getQueue(m_graphicsQueueFamilyIndex, 0);

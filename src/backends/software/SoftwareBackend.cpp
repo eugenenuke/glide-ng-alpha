@@ -3672,8 +3672,6 @@ inline void SoftwareBackend::RasterizeTriangleLoopsSIMD(
       coverageMask = coverageMask & depthClipMask;
       if (coverageMask.AllZero()) continue;
 
-      Simd8f invW = Simd8f(1.0f) / wVal;
-
       // 4. Stipple Transparency
       if (stippleMode != 0) {
         Simd8i stippleX;

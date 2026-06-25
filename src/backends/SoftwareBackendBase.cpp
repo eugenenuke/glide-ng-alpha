@@ -1155,6 +1155,7 @@ union SDL2_Event {
 
 typedef int (*PFN_SDL2_PushEvent)(SDL2_Event* event);
 
+#if !defined(DIRECT_SDL2)
 // SDL 1.2 Event Filter
 int AntiGrabBreakFilterSdl12(const void* rawEvent) {
   if (s_keyHandlingMode != GlideWrapper::KeyHandlingMode::Debounced) {
@@ -1235,7 +1236,9 @@ int AntiGrabBreakFilterSdl12(const void* rawEvent) {
 
   return 1;
 }
+#endif
 
+#if !defined(DIRECT_SDL12)
 // SDL2 filter
 int AntiGrabBreakFilterSdl2(void* userdata, void* rawEvent) {
   const SDL2_Event* event = reinterpret_cast<const SDL2_Event*>(rawEvent);
@@ -1248,7 +1251,6 @@ int AntiGrabBreakFilterSdl2(void* userdata, void* rawEvent) {
 
   if (type == 0x300 || type == 0x301) {  // SDL_KEYDOWN or SDL_KEYUP
     uint32_t sym = event->key.keysym.sym;
-    uint8_t state = event->key.state;
     uint32_t scancode = event->key.keysym.scancode;
 
     uint32_t keyIndex = sym;
@@ -1323,6 +1325,7 @@ int AntiGrabBreakFilterSdl2(void* userdata, void* rawEvent) {
 
   return 1;
 }
+#endif
 
 }  // namespace
 
@@ -1753,11 +1756,13 @@ static const KeyMapping g_keyMappings[] = {{"UP", 273, 103, 1073741906, 82},
                                            {"ESCAPE", 27, 9, 27, 41}};
 
 void SoftwareBackendBase::ProcessKeySimulation() {
+#if !defined(DIRECT_SDL12) && !defined(DIRECT_SDL2)
   static void* sdl12Handle = nullptr;
   static void* sdl2Handle = nullptr;
   static PFN_SDL12_PushEvent sdl12PushEvent = nullptr;
   static PFN_SDL2_PushEvent sdl2PushEvent = nullptr;
   static bool resolvedHandles = false;
+#endif
 
   if (!m_simInit) {
     m_simInit = true;
@@ -1881,6 +1886,7 @@ void SoftwareBackendBase::ProcessKeySimulation() {
   }
 
   // Resolve handles on demand (once)
+#if !defined(DIRECT_SDL12) && !defined(DIRECT_SDL2)
   if (!resolvedHandles) {
     resolvedHandles = true;
 
@@ -1901,6 +1907,7 @@ void SoftwareBackendBase::ProcessKeySimulation() {
       sdl2PushEvent = (PFN_SDL2_PushEvent)dlsym(sdl2Handle, "SDL_PushEvent");
     }
   }
+#endif
 
   auto now = std::chrono::steady_clock::now();
   uint32_t elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
