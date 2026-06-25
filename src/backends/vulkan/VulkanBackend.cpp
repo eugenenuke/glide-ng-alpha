@@ -510,6 +510,11 @@ void VulkanBackend::Shutdown() {
 static thread_local bool s_x11ErrorOccurred = false;
 static int VulkanX11ErrorHandler(Display* dpy, XErrorEvent* err) {
   s_x11ErrorOccurred = true;
+  char msg[256];
+  XGetErrorText(dpy, err->error_code, msg, sizeof(msg));
+  std::cout << "Info: Vulkan X11 Error intercepted: " << msg 
+            << " (Opcode=" << (int)err->request_code 
+            << ", ResourceId=" << err->resourceid << ")" << std::endl;
   return 0;
 }
 #endif
@@ -797,18 +802,25 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 
         std::cout << "Info: Headless blitting active for raw window hook to prevent input lag/sticky keys." << std::endl;
 
-        // 1. Force immediate synchronization to let X11 server catch up with DOSBox's window creation
-        XSync(dpy, False);
-
-        // 2. Install unified temporary error handler
+        // 1. Install unified temporary error handler
         s_x11ErrorOccurred = false;
         auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
 
-        // 3. Query window attributes
-        XWindowAttributes attrs;
-        Status status = XGetWindowAttributes(dpy, win, &attrs);
+        // 2. Query window attributes with a robust retry loop to handle asynchronous window creation races!
+        XWindowAttributes attrs{};
+        Status status = 0;
+        for (int retry = 0; retry < 15; ++retry) {
+          s_x11ErrorOccurred = false;
+          XSync(dpy, False); // Flush any pending events on the server
+          status = XGetWindowAttributes(dpy, win, &attrs);
+          XSync(dpy, False); // Sync again to catch any asynchronous protocol errors
+          if (status != 0 && !s_x11ErrorOccurred) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
 
-        // 4. Create GC with graphics exposures disabled to prevent event queue flooding!
+        // 3. Create GC with graphics exposures disabled to prevent event queue flooding!
         GC gc = nullptr;
         if (status != 0 && !s_x11ErrorOccurred) {
           XGCValues values;
@@ -816,10 +828,10 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
           gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
         }
 
-        // 5. Sync again to catch any asynchronous protocol errors from the block
+        // 4. Sync again to catch any asynchronous protocol errors from GC creation
         XSync(dpy, False);
 
-        // 6. Restore original error handler
+        // 5. Restore original error handler
         XSetErrorHandler(oldHandler);
 
         // 7. If everything succeeded cleanly, activate the X11 Blit Fallback!
