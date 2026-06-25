@@ -3,21 +3,6 @@
 #include <GLES3/gl32.h>
 #include <SDL2/SDL.h>
 
-#if defined(__linux__)
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <GL/glx.h>
-#include <dlfcn.h>
-// Undefine legacy X11 macros to prevent collisions with modern C++ enums/classes
-#undef None
-#undef Success
-#undef Status
-#undef Always
-#undef True
-#undef False
-#undef Bool
-#endif
-
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -296,7 +281,7 @@ bool OpenGLESBackend::SwapBuffers() {
 
   GLIDE_PROFILE_SCOPE("GLES::SwapBuffers");
 
-  if (!m_headlessMode && ((m_sdlWindow && m_glContext) || m_glxContext)) {
+  if (!m_headlessMode && m_sdlWindow && m_glContext) {
     // Reset crucial OpenGL states to safe presentation defaults,
     // preventing active game states (like disabled color masks or custom
     // scissors) from masking or clipping our presentation!
@@ -372,18 +357,7 @@ bool OpenGLESBackend::SwapBuffers() {
     // screen!
     {
       GLIDE_PROFILE_SCOPE("GLES::SwapBuffers_GLSwap");
-      if (m_sdlWindow) {
-        SDL_GL_SwapWindow(static_cast<SDL_Window*>(m_sdlWindow));
-      }
-#if defined(__linux__)
-      else if (m_glxContext) {
-        typedef void (*PFN_glXSwapBuffers)(Display*, GLXDrawable);
-        auto pfn_glXSwapBuffers = reinterpret_cast<PFN_glXSwapBuffers>(dlsym(m_libGLHandle, "glXSwapBuffers"));
-        if (pfn_glXSwapBuffers) {
-          pfn_glXSwapBuffers(reinterpret_cast<Display*>(m_x11Display), m_x11Window);
-        }
-      }
-#endif
+      SDL_GL_SwapWindow(static_cast<SDL_Window*>(m_sdlWindow));
     }
   }
 
@@ -638,131 +612,17 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
   m_sdlWindowOwnedByUs = false;
   m_glContextOwnedByUs = false;
 
-#if defined(__linux__)
-  // Dynamic SDL 1.2 Host Detection for GLES:
-  // If we detect an SDL1.2 host, we MUST NOT initialize SDL2 video.
-  // Instead, we implement a pure native GLX context creation directly on the X11 Window ID.
-  void* sdl12WM = dlsym(RTLD_DEFAULT, "SDL_GetWMInfo");
-  if (nativeWindowHandle && sdl12WM != nullptr) {
-    GLIDE_LOG(INFO, "GLES", "SDL 1.2 host detected in GLES. Activating direct X11/GLX native context fallback.");
-    
-    m_x11Display = XOpenDisplay(nullptr);
-    if (!m_x11Display) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to open X11 Display for GLX fallback");
-      return false;
-    }
-    m_x11DisplayOwned = true;
-    m_x11Window = reinterpret_cast<unsigned long>(nativeWindowHandle);
-    
-    // Choose visual matching the window's visual/depth
-    XWindowAttributes attrs;
-    XGetWindowAttributes(reinterpret_cast<Display*>(m_x11Display), m_x11Window, &attrs);
-    
-    XVisualInfo visTemplate;
-    visTemplate.visualid = XVisualIDFromVisual(attrs.visual);
-    int numVisuals = 0;
-    XVisualInfo* visInfo = XGetVisualInfo(reinterpret_cast<Display*>(m_x11Display), VisualIDMask, &visTemplate, &numVisuals);
-    if (!visInfo) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to get XVisualInfo matching window visual");
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      m_x11Display = nullptr;
-      m_x11DisplayOwned = false;
-      return false;
-    }
-    
-    typedef GLXContext (*PFN_glXCreateContext)(Display*, XVisualInfo*, GLXContext, int);
-    typedef int (*PFN_glXMakeCurrent)(Display*, GLXDrawable, GLXContext);
-    
-    void* libgl = dlopen("libGL.so.1", RTLD_LAZY | RTLD_GLOBAL);
-    if (!libgl) {
-      libgl = dlopen("libGL.so", RTLD_LAZY | RTLD_GLOBAL);
-    }
-    if (!libgl) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to load libGL for GLX context creation");
-      XFree(visInfo);
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      m_x11Display = nullptr;
-      m_x11DisplayOwned = false;
-      return false;
-    }
-    
-    auto pfn_glXCreateContext = reinterpret_cast<PFN_glXCreateContext>(dlsym(libgl, "glXCreateContext"));
-    auto pfn_glXMakeCurrent = reinterpret_cast<PFN_glXMakeCurrent>(dlsym(libgl, "glXMakeCurrent"));
-    
-    if (!pfn_glXCreateContext || !pfn_glXMakeCurrent) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to resolve GLX symbols");
-      dlclose(libgl);
-      XFree(visInfo);
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      m_x11Display = nullptr;
-      m_x11DisplayOwned = false;
-      return false;
-    }
-    
-    m_glxContext = pfn_glXCreateContext(reinterpret_cast<Display*>(m_x11Display), visInfo, nullptr, 1);
-    XFree(visInfo);
-    
-    if (!m_glxContext) {
-      GLIDE_LOG(CRITICAL, "GLES", "glXCreateContext failed");
-      dlclose(libgl);
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      m_x11Display = nullptr;
-      m_x11DisplayOwned = false;
-      return false;
-    }
-    
-    if (!pfn_glXMakeCurrent(reinterpret_cast<Display*>(m_x11Display), m_x11Window, reinterpret_cast<GLXContext>(m_glxContext))) {
-      GLIDE_LOG(CRITICAL, "GLES", "glXMakeCurrent failed");
-      typedef void (*PFN_glXDestroyContext)(Display*, GLXContext);
-      auto pfn_glXDestroyContext = reinterpret_cast<PFN_glXDestroyContext>(dlsym(libgl, "glXDestroyContext"));
-      if (pfn_glXDestroyContext) {
-        pfn_glXDestroyContext(reinterpret_cast<Display*>(m_x11Display), reinterpret_cast<GLXContext>(m_glxContext));
-      }
-      dlclose(libgl);
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      m_x11Display = nullptr;
-      m_x11DisplayOwned = false;
-      m_glxContext = nullptr;
-      return false;
-    }
-    
-    m_libGLHandle = libgl;
-    m_isWindowHooked = true;
-    m_sdlWindow = nullptr;
-    m_glContext = nullptr;
-    m_glContextOwnedByUs = true;
-    
-    GLIDE_LOG(INFO, "GLES", "Successfully created native GLX context directly on host window.");
-    return true;
-  }
-#endif
-
-  // --- PATH 0: Hijack Active SDL2 Window FIRST (Wayland Safety) ---
-  // In GLES, we ONLY hijack the window, but always create our own dedicated GLES context on it
-  // to prevent mixing GLES calls with Desktop OpenGL context configurations (black screen).
+  // --- PATH 0: Hijack Active SDL2 Window and OpenGL Context FIRST (Wayland Safety) ---
   SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
-  if (hijackedWin && !m_config.forceNoWindow) {
-    GLIDE_LOG(INFO, "GLES", "Hijacking active SDL2 window (" << hijackedWin << ") for dedicated OpenGL ES context");
+  SDL_GLContext hijackedCtx = SDL_GL_GetCurrentContext();
+  if (hijackedWin && hijackedCtx && !m_config.forceNoWindow) {
+    GLIDE_LOG(INFO, "GLES", "Hijacking active SDL2 window (" << hijackedWin << ") and context (" << hijackedCtx << ")");
     m_sdlWindow = hijackedWin;
+    m_glContext = hijackedCtx;
     m_sdlWindowOwnedByUs = false;
+    m_glContextOwnedByUs = false;
     m_isWindowHooked = true;
-
-    // Configure OpenGL ES 3.2 attributes for context creation on hijacked window
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-
-    m_glContext = SDL_GL_CreateContext(hijackedWin);
-    if (m_glContext) {
-      m_glContextOwnedByUs = true;
-      GLIDE_LOG(INFO, "GLES", "Successfully created dedicated OpenGL ES context on hijacked window");
-      return true;
-    } else {
-      GLIDE_LOG(WARN, "GLES", "Failed to create dedicated GLES context on hijacked window: " << SDL_GetError() << ". Falling back to standalone.");
-      m_sdlWindow = nullptr;
-      m_isWindowHooked = false;
-    }
+    return true;
   }
 
   // Set default ownership for newly created resources in the fallback path
@@ -1128,29 +988,6 @@ void OpenGLESBackend::DestroyGLContext() {
     }
     m_glContext = nullptr;
   }
-#if defined(__linux__)
-  if (m_glxContext) {
-    if (m_glContextOwnedByUs && m_libGLHandle) {
-      typedef void (*PFN_glXDestroyContext)(Display*, GLXContext);
-      auto pfn_glXDestroyContext = reinterpret_cast<PFN_glXDestroyContext>(dlsym(m_libGLHandle, "glXDestroyContext"));
-      if (pfn_glXDestroyContext && m_x11Display) {
-        pfn_glXDestroyContext(reinterpret_cast<Display*>(m_x11Display), reinterpret_cast<GLXContext>(m_glxContext));
-      }
-    }
-    m_glxContext = nullptr;
-  }
-  if (m_x11Display) {
-    if (m_x11DisplayOwned) {
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-    }
-    m_x11Display = nullptr;
-    m_x11DisplayOwned = false;
-  }
-  if (m_libGLHandle) {
-    dlclose(m_libGLHandle);
-    m_libGLHandle = nullptr;
-  }
-#endif
   if (m_sdlWindow) {
     if (m_sdlWindowOwnedByUs) {
       SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));

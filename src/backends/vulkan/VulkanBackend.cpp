@@ -922,7 +922,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   }
 
   // --- PATH B: Standalone SDL2 Window (or Fallback if Hooked Failed) ---
-  if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow && !dlsym(RTLD_DEFAULT, "SDL_GetWMInfo")) {
+  if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow) {
     if (isHookedFailed) {
       GLIDE_LOG(WARN, "Vulkan",
                 "Direct hooked binding failed. Falling back to standalone SDL2 "
