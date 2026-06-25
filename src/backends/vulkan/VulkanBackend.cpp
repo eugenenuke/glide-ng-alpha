@@ -728,9 +728,12 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 #if defined(__linux__)
     m_nativeDisplay = nullptr;
     m_nativeDisplayOwnedByUs = false;
-    m_nativeWindow = nullptr;
-
     m_nativeWindow = nativeWindowHandle;
+
+    m_useX11BlitFallback = false;
+    m_x11GC = nullptr;
+    m_x11Visual = nullptr;
+    m_x11Depth = 0;
 
     // 1. ALWAYS open our own private, dedicated X11 Display connection for blitting!
     // This completely isolates our rendering pipeline from SDL's event connection,
@@ -796,76 +799,19 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     if (useHeadlessBlit) {
 #if defined(__linux__)
       if (m_nativeDisplay && m_nativeWindow) {
-        auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
-        auto win = reinterpret_cast<::Window>(
-            reinterpret_cast<uintptr_t>(m_nativeWindow)); // Use resolved untruncated window!
+        m_useX11BlitFallback = true;
+        m_isWindowHooked = true;  // KEEP HOOKED!
+        m_sdlWindow = nullptr;    // DO NOT create a standalone window!
 
-        std::cout << "Info: Headless blitting active for raw window hook to prevent input lag/sticky keys." << std::endl;
+        m_headlessWidth = width;
+        m_headlessHeight = height;
+        m_headlessMode = true;
 
-        // 1. Install unified temporary error handler
-        s_x11ErrorOccurred = false;
-        auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
+        // Destroy the surface since we won't present via Vulkan
+        m_surface.reset();
 
-        // 2. Query window attributes with a robust retry loop to handle asynchronous window creation races!
-        XWindowAttributes attrs{};
-        Status status = 0;
-        for (int retry = 0; retry < 15; ++retry) {
-          s_x11ErrorOccurred = false;
-          XSync(dpy, False); // Flush any pending events on the server
-          status = XGetWindowAttributes(dpy, win, &attrs);
-          XSync(dpy, False); // Sync again to catch any asynchronous protocol errors
-          if (status != 0 && !s_x11ErrorOccurred) {
-            break;
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        }
-
-        // 3. Create GC with graphics exposures disabled to prevent event queue flooding!
-        GC gc = nullptr;
-        if (status != 0 && !s_x11ErrorOccurred) {
-          XGCValues values;
-          values.graphics_exposures = False;
-          gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
-        }
-
-        // 4. Sync again to catch any asynchronous protocol errors from GC creation
-        XSync(dpy, False);
-
-        // 5. Restore original error handler
-        XSetErrorHandler(oldHandler);
-
-        // 7. If everything succeeded cleanly, activate the X11 Blit Fallback!
-        if (status != 0 && gc != nullptr && !s_x11ErrorOccurred) {
-          m_x11Visual = attrs.visual;
-          m_x11Depth = attrs.depth;
-          m_x11GC = gc;
-
-          m_useX11BlitFallback = true;
-          m_isWindowHooked = true;  // KEEP HOOKED!
-          m_sdlWindow = nullptr;    // DO NOT create a standalone window!
-
-          std::cout << "Info: X11 Blit Fallback activated successfully. Game Resolution="
-                    << width << "x" << height << ", Depth=" << m_x11Depth << std::endl;
-
-          m_headlessWidth = width;
-          m_headlessHeight = height;
-          m_realWindowWidth = attrs.width;
-          m_realWindowHeight = attrs.height;
-          m_headlessMode = true;
-
-          // Destroy the surface since swapchain failed or bypassed
-          m_surface.reset();
-
-          presentationSuccess = true;
-        } else {
-          GLIDE_LOG(
-              WARN, "Vulkan",
-              "X11 Blit Fallback initialization failed (window not ready or "
-              "error). Falling back to standalone window...");
-          if (gc) {
-            XFreeGC(dpy, gc);
-          }
-        }
+        presentationSuccess = true;
+        std::cout << "Info: X11 Headless blitter queued for lazy initialization on first frame swap." << std::endl;
       }
 #endif
     }
@@ -1833,76 +1779,124 @@ bool VulkanBackend::SwapBuffers() {
 #if defined(__linux__)
     if (m_useX11BlitFallback) {
       GLIDE_PROFILE_SCOPE("Vulkan::X11BlitFallback_Present");
-      // Wait for the copy submission to complete so pixels are ready on CPU
-      {
-        GLIDE_PROFILE_SCOPE("Vulkan::X11BlitFallback_FenceWait");
-        if (m_device->waitForFences(1, &m_fences[m_currentFrameSlot].get(),
-                                    VK_TRUE,
-                                    UINT64_MAX) != vk::Result::eSuccess) {
-          GLIDE_LOG(CRITICAL, "Vulkan",
-                    "X11 Blit Fallback: Failed to wait for copy fence!");
+
+      auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
+      auto win = reinterpret_cast<::Window>(
+          reinterpret_cast<uintptr_t>(m_nativeWindow));
+
+      // 1. Lazy-initialize X11 GC and query window attributes on the very first frame!
+      // By this time, the window is guaranteed to be fully mapped and ready on the X server.
+      if (m_x11GC == nullptr) {
+        GLIDE_LOG(INFO, "Vulkan", "Lazy-initializing X11 Blitter on first frame swap...");
+        std::cout << "Info: Lazy-initializing X11 Blitter on first frame swap..." << std::endl;
+
+        XSync(dpy, False);
+        s_x11ErrorOccurred = false;
+        auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
+
+        XWindowAttributes attrs{};
+        Status status = XGetWindowAttributes(dpy, win, &attrs);
+
+        GC gc = nullptr;
+        if (status != 0 && !s_x11ErrorOccurred) {
+          XGCValues values;
+          values.graphics_exposures = False;
+          gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
+        }
+
+        XSync(dpy, False);
+        XSetErrorHandler(oldHandler);
+
+        if (status != 0 && gc != nullptr && !s_x11ErrorOccurred) {
+          m_x11Visual = attrs.visual;
+          m_x11Depth = attrs.depth;
+          m_x11GC = gc;
+          m_realWindowWidth = attrs.width;
+          m_realWindowHeight = attrs.height;
+          std::cout << "Info: X11 Blit Fallback lazy-initialized successfully. Window ID="
+                    << std::hex << win << std::dec
+                    << ", Resolution=" << m_realWindowWidth << "x" << m_realWindowHeight
+                    << ", Depth=" << m_x11Depth << std::endl;
+        } else {
+          GLIDE_LOG(CRITICAL, "Vulkan", "Failed to lazy-initialize X11 Blit Fallback!");
+          std::cout << "Error: Failed to lazy-initialize X11 Blit Fallback! Drawing will be disabled." << std::endl;
+          m_useX11BlitFallback = false;
         }
       }
 
-      void* pixels = m_gpuStagingMaps[m_currentFrameSlot];
-      uint32_t srcW = m_headlessWidth;
-      uint32_t srcH = m_headlessHeight;
-      uint32_t dstW = m_realWindowWidth;
-      uint32_t dstH = m_realWindowHeight;
-
-      char* blitData = reinterpret_cast<char*>(pixels);
-      uint32_t blitWidth = srcW;
-      uint32_t blitHeight = srcH;
-      uint32_t blitPitch = srcW * 4;
-
-      if (srcW != dstW || srcH != dstH) {
-        // Perform fast CPU-based nearest-neighbor scaling for resolution mismatches (e.g. 512x384 in 640x480 window)
-        m_vulkanResolvedBuffer.resize(dstW * dstH);
-        uint32_t* dstPixels = m_vulkanResolvedBuffer.data();
-        const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(pixels);
-
-        float scaleX = (float)srcW / dstW;
-        float scaleY = (float)srcH / dstH;
-
-#pragma omp parallel for if (dstH > 240)
-        for (uint32_t y = 0; y < dstH; y++) {
-          uint32_t srcY = (uint32_t)(y * scaleY);
-          if (srcY >= srcH) srcY = srcH - 1;
-          const uint32_t* srcRow = &srcPixels[srcY * srcW];
-          uint32_t* dstRow = &dstPixels[y * dstW];
-          for (uint32_t x = 0; x < dstW; x++) {
-            uint32_t srcX = (uint32_t)(x * scaleX);
-            if (srcX >= srcW) srcX = srcW - 1;
-            dstRow[x] = srcRow[srcX];
+      // 2. Only perform blitting if GC is valid (lazy initialization succeeded!)
+      if (m_x11GC != nullptr) {
+        // Wait for the copy submission to complete so pixels are ready on CPU
+        {
+          GLIDE_PROFILE_SCOPE("Vulkan::X11BlitFallback_FenceWait");
+          if (m_device->waitForFences(1, &m_fences[m_currentFrameSlot].get(),
+                                      VK_TRUE,
+                                      UINT64_MAX) != vk::Result::eSuccess) {
+            GLIDE_LOG(CRITICAL, "Vulkan",
+                      "X11 Blit Fallback: Failed to wait for copy fence!");
           }
         }
 
-        blitData = reinterpret_cast<char*>(m_vulkanResolvedBuffer.data());
-        blitWidth = dstW;
-        blitHeight = dstH;
-        blitPitch = dstW * 4;
-      }
+        void* pixels = m_gpuStagingMaps[m_currentFrameSlot];
+        uint32_t srcW = m_headlessWidth;
+        uint32_t srcH = m_headlessHeight;
+        uint32_t dstW = m_realWindowWidth;
+        uint32_t dstH = m_realWindowHeight;
 
-      XImage* ximage = XCreateImage(
-          reinterpret_cast<Display*>(m_nativeDisplay),
-          reinterpret_cast<Visual*>(m_x11Visual), m_x11Depth, ZPixmap, 0,
-          blitData, blitWidth, blitHeight,
-          32,        // Bitmap pad
-          blitPitch  // Bytes per line
-      );
+        char* blitData = reinterpret_cast<char*>(pixels);
+        uint32_t blitWidth = srcW;
+        uint32_t blitHeight = srcH;
+        uint32_t blitPitch = srcW * 4;
 
-      if (ximage) {
-        XPutImage(reinterpret_cast<Display*>(m_nativeDisplay),
-                  reinterpret_cast<::Window>(
-                      reinterpret_cast<uintptr_t>(m_nativeWindow)),
-                  reinterpret_cast<GC>(m_x11GC), ximage, 0, 0,  // Source X, Y
-                  0, 0,  // Destination X, Y
-                  blitWidth, blitHeight);
-        XFlush(reinterpret_cast<Display*>(m_nativeDisplay));
+        if (srcW != dstW || srcH != dstH) {
+          // Perform fast CPU-based nearest-neighbor scaling for resolution mismatches (e.g. 512x384 in 640x480 window)
+          m_vulkanResolvedBuffer.resize(dstW * dstH);
+          uint32_t* dstPixels = m_vulkanResolvedBuffer.data();
+          const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(pixels);
 
-        // Free the XImage shell without freeing our mapped/resolved buffers
-        ximage->data = nullptr;
-        XDestroyImage(ximage);
+          float scaleX = (float)srcW / dstW;
+          float scaleY = (float)srcH / dstH;
+
+#pragma omp parallel for if (dstH > 240)
+          for (uint32_t y = 0; y < dstH; y++) {
+            uint32_t srcY = (uint32_t)(y * scaleY);
+            if (srcY >= srcH) srcY = srcH - 1;
+            const uint32_t* srcRow = &srcPixels[srcY * srcW];
+            uint32_t* dstRow = &dstPixels[y * dstW];
+            for (uint32_t x = 0; x < dstW; x++) {
+              uint32_t srcX = (uint32_t)(x * scaleX);
+              if (srcX >= srcW) srcX = srcW - 1;
+              dstRow[x] = srcRow[srcX];
+            }
+          }
+
+          blitData = reinterpret_cast<char*>(m_vulkanResolvedBuffer.data());
+          blitWidth = dstW;
+          blitHeight = dstH;
+          blitPitch = dstW * 4;
+        }
+
+        XImage* ximage = XCreateImage(
+            reinterpret_cast<Display*>(m_nativeDisplay),
+            reinterpret_cast<Visual*>(m_x11Visual), m_x11Depth, ZPixmap, 0,
+            blitData, blitWidth, blitHeight,
+            32,        // Bitmap pad
+            blitPitch  // Bytes per line
+        );
+
+        if (ximage) {
+          XPutImage(reinterpret_cast<Display*>(m_nativeDisplay),
+                    reinterpret_cast<::Window>(
+                        reinterpret_cast<uintptr_t>(m_nativeWindow)),
+                    reinterpret_cast<GC>(m_x11GC), ximage, 0, 0,  // Source X, Y
+                    0, 0,  // Destination X, Y
+                    blitWidth, blitHeight);
+          XFlush(reinterpret_cast<Display*>(m_nativeDisplay));
+
+          // Free the XImage shell without freeing our mapped/resolved buffers
+          ximage->data = nullptr;
+          XDestroyImage(ximage);
+        }
       }
     }
 #endif
