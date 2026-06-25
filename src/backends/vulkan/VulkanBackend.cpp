@@ -810,12 +810,18 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       int actualWidth = width;
       int actualHeight = height;
 
-      if (CreateSwapchain(actualWidth, actualHeight)) {
+      bool forceBlit = (dlsym(RTLD_DEFAULT, "SDL_GetWMInfo") != nullptr);
+      if (!forceBlit && CreateSwapchain(actualWidth, actualHeight)) {
         m_headlessMode = false;
         presentationSuccess = true;
       } else {
-        GLIDE_LOG(WARN, "Vulkan",
-                  "Direct swapchain failed. Attempting X11 Blit Fallback...");
+        if (forceBlit) {
+          GLIDE_LOG(INFO, "Vulkan",
+                    "SDL 1.2 host detected. Forcing X11 Blit Fallback to prevent sticky keys.");
+        } else {
+          GLIDE_LOG(WARN, "Vulkan",
+                    "Direct swapchain failed. Attempting X11 Blit Fallback...");
+        }
 #if defined(__linux__)
         if (m_nativeDisplay && m_nativeWindow) {
           auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
@@ -1599,7 +1605,7 @@ bool VulkanBackend::SwapBuffers() {
 
   // Captures keyboard inputs on our standalone window and forwards them back
   // to the host emulator's event queue.
-  if (m_sdlWindow && !m_isWindowHooked) {
+  if (m_sdlWindow) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
