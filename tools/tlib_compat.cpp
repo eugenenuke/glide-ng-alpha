@@ -4,8 +4,7 @@
 #include <termios.h>
 #include <sys/select.h>
 
-__attribute__((weak)) extern volatile int g_glideWrapperSdlKeyHit;
-__attribute__((weak)) extern volatile int g_glideWrapperLastKey;
+
 
 namespace {
     struct termios save_termdata;
@@ -45,9 +44,7 @@ extern "C" int tlOkToRender(void) {
 }
 
 extern "C" int tlKbHit(void) {
-    if (&g_glideWrapperSdlKeyHit && g_glideWrapperSdlKeyHit) {
-        return 1;
-    }
+
 
     if (s_stdin_eof) {
         return 0;
@@ -65,15 +62,7 @@ extern "C" int tlKbHit(void) {
 }
 
 extern "C" char tlGetCH(void) {
-    if (&g_glideWrapperSdlKeyHit && g_glideWrapperSdlKeyHit) {
-        g_glideWrapperSdlKeyHit = 0;
-        char key = ' ';
-        if (&g_glideWrapperLastKey && g_glideWrapperLastKey) {
-            key = (char)g_glideWrapperLastKey;
-            g_glideWrapperLastKey = 0;
-        }
-        return key;
-    }
+
 
     if (s_stdin_eof) {
         return 0;

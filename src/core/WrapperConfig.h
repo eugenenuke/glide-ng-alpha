@@ -26,12 +26,6 @@ enum class ApiVersion {
     GLIDE_2_61 = 261
 };
 
-enum class KeyHandlingMode {
-    Bypass,
-    GrabOnly,
-    Debounced
-};
-
 struct WrapperConfig {
     CardModel model{CardModel::Voodoo2};
     ApiVersion apiVersion{ApiVersion::GLIDE_2_43};
@@ -52,7 +46,6 @@ struct WrapperConfig {
     bool vsync{true}; // Enables swapchain vertical synchronization (capping to refresh rate)
     uint32_t windowScale{1}; // 1 = 1x, 2 = 2x, etc.
     uint32_t presentationFilter{0}; // 0 = Nearest-Neighbor (Sharp), 1 = Linear/Bilinear (Smooth)
-    KeyHandlingMode keyHandlingMode{KeyHandlingMode::Bypass};
 };
 
 class EmulationRegistry {

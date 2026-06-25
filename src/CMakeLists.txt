@@ -36,37 +36,10 @@ target_include_directories(GlideWrapperCore PUBLIC
     "${CMAKE_BINARY_DIR}/generated_shaders"
 )
 add_dependencies(GlideWrapperCore CompileShaders)
+target_compile_definitions(GlideWrapperCore PUBLIC DIRECT_SDL2)
 target_link_libraries(GlideWrapperCore PUBLIC Vulkan::Vulkan SDL2::SDL2 GLESv2 OpenMP::OpenMP_CXX)
 if(UNIX AND NOT APPLE)
     target_link_libraries(GlideWrapperCore PUBLIC X11::X11)
-endif()
-
-# --- TARGET 2: SDL 1.2 Direct GlideWrapperCore ---
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL12 REQUIRED IMPORTED_TARGET sdl)
-
-add_library(GlideWrapperCore_sdl12 STATIC ${CORE_SOURCES})
-set_source_files_properties(
-    backends/SoftwareBackendBase.cpp
-    backends/software/SoftwareBackend.cpp
-    PROPERTIES COMPILE_FLAGS "-mavx2"
-)
-set_target_properties(GlideWrapperCore_sdl12 PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_definitions(GlideWrapperCore_sdl12 PRIVATE DIRECT_SDL12)
-target_include_directories(GlideWrapperCore_sdl12 PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/core"
-    "${CMAKE_CURRENT_SOURCE_DIR}/backends"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include/glide2"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include/3dfx"
-    "${CMAKE_BINARY_DIR}/generated_shaders"
-)
-add_dependencies(GlideWrapperCore_sdl12 CompileShaders)
-# Link directly to SDL 1.2 via PkgConfig
-target_link_libraries(GlideWrapperCore_sdl12 PUBLIC Vulkan::Vulkan PkgConfig::SDL12 GLESv2 OpenMP::OpenMP_CXX)
-if(UNIX AND NOT APPLE)
-    target_link_libraries(GlideWrapperCore_sdl12 PUBLIC X11::X11)
 endif()
 
 # --- TARGET 3: SDL 2.0 Direct GlideWrapperCore ---
@@ -104,17 +77,6 @@ target_include_directories(glide2x PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/3dfx"
 )
 target_link_libraries(glide2x PRIVATE GlideWrapperCore)
-
-# 3. SDL 1.2 Direct Glide 2 Frontend Export Library (libglide2x_sdl12.so)
-add_library(glide2x_sdl12 SHARED glide2/glide2_entry.cpp)
-set_target_properties(glide2x_sdl12 PROPERTIES SOVERSION 0)
-set_target_properties(glide2x_sdl12 PROPERTIES OUTPUT_NAME "glide2x_sdl12" VERSION 2.0.0)
-target_include_directories(glide2x_sdl12 PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include/glide2"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../include/3dfx"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/3dfx"
-)
-target_link_libraries(glide2x_sdl12 PRIVATE GlideWrapperCore_sdl12)
 
 # 4. SDL 2.0 Direct Glide 2 Frontend Export Library (libglide2x_sdl2.so)
 add_library(glide2x_sdl2 SHARED glide2/glide2_entry.cpp)

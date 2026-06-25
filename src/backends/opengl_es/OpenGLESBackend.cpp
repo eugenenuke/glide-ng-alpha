@@ -242,7 +242,6 @@ bool OpenGLESBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_headlessDepthBuffer.resize(width * height, 0.0f);
   SetClipWindow(0, 0, width, height);
 
-  RegisterAntiGrabFilter();
   m_windowAttached = true;
   return true;
 }
@@ -258,14 +257,12 @@ void OpenGLESBackend::DetachWindow() {
   FreeCpuBuffers();
 
   m_windowAttached = false;
-  UnregisterAntiGrabFilter();
 }
 
 bool OpenGLESBackend::SwapBuffers() {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_initialized || !m_windowAttached) return false;
 
-  ProcessPendingKeyReleases();
 
   // Flush any pending geometry batches first!
   FlushBatch();

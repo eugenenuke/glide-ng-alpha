@@ -47,4 +47,4 @@ target_include_directories(glide3_info PRIVATE
 
 
 
-add_subdirectory(snake)
+# add_subdirectory(snake)

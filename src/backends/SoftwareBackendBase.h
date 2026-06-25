@@ -51,16 +51,6 @@ struct AlignedAllocator {
   bool operator!=(const AlignedAllocator&) const noexcept { return false; }
 };
 
-struct SimulatedKeyEvent {
-  std::string keyName;
-  bool down;
-  uint32_t sdl12_sym;
-  uint32_t sdl12_scancode;
-  uint32_t sdl2_sym;
-  uint32_t sdl2_scancode;
-  uint32_t triggerTimeMs;
-};
-
 class SoftwareBackendBase : public IGraphicsBackend {
  public:
   SoftwareBackendBase() = default;
@@ -325,19 +315,7 @@ class SoftwareBackendBase : public IGraphicsBackend {
   bool m_aaEnabled{false};
   void ResolveAAMode();
   void SetAAState(bool enabled) override;
-  bool m_simInit{false};
-  std::vector<SimulatedKeyEvent> m_simQueue;
-  size_t m_simQueueIndex{0};
-  std::chrono::steady_clock::time_point m_simStartRealTime;
-  void ProcessKeySimulation();
 
-  bool m_isSdl2{false};
-  bool m_isHijacked{false};
-  void DetectHostEnvironment();
-  void HandleGrabBypass();
-  void RegisterAntiGrabFilter();
-  void UnregisterAntiGrabFilter();
-  void ProcessPendingKeyReleases();
 };
 
 extern thread_local bool g_inInjection;

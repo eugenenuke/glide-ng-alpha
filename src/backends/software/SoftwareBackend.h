@@ -120,22 +120,12 @@ class SoftwareBackend : public SoftwareBackendBase {
   uint32_t m_tileCols{0};
   uint32_t m_tileRows{0};
 
-#if defined(__linux__)
-  void* m_x11Display{nullptr};   // Raw Display*
-  unsigned long m_x11Window{0};  // Raw Window (XID)
-  void* m_x11GC{nullptr};        // Raw GC
-  void* m_x11Visual{nullptr};    // Raw Visual*
-  int m_x11Depth{0};
-  bool m_x11DisplayOwned{false};
-  uint32_t m_realWindowWidth{0};
-  uint32_t m_realWindowHeight{0};
-#endif
-#if defined(DIRECT_SDL12) || defined(DIRECT_SDL2)
-  void* m_sdlWindow{nullptr};    // SDL_Window* or SDL_Surface*
+#if defined(DIRECT_SDL2)
+  void* m_sdlWindow{nullptr};    // SDL_Window*
   bool m_sdlWindowOwned{false};
-  void* m_sdlRenderer{nullptr};  // SDL_Renderer* (SDL2 only)
-  bool m_sdlRendererOwned{false}; // SDL_Renderer* ownership (SDL2 only)
-  void* m_sdlTexture{nullptr};   // SDL_Texture* (SDL2 only)
+  void* m_sdlRenderer{nullptr};  // SDL_Renderer*
+  bool m_sdlRendererOwned{false}; // SDL_Renderer* ownership
+  void* m_sdlTexture{nullptr};   // SDL_Texture*
 #endif
 };
 

@@ -114,37 +114,7 @@ bool JsonConfigLoader::Load(const std::string& configFilePath, WrapperConfig& ou
             }
         }
 
-        // Parse keyHandlingMode from JSON
-        size_t keyModePos = content.find("\"keyHandlingMode\"");
-        if (keyModePos != std::string::npos) {
-            size_t colonPos = content.find(":", keyModePos);
-            if (colonPos != std::string::npos) {
-                size_t valPos = content.find_first_of("\"abcdefghijklmnopqrstuvwxyz", colonPos);
-                if (valPos != std::string::npos) {
-                    std::string valStr;
-                    size_t idx = valPos;
-                    if (content[idx] == '"') {
-                        idx++;
-                        while (idx < content.length() && content[idx] != '"') {
-                            valStr += content[idx];
-                            idx++;
-                        }
-                    } else {
-                        while (idx < content.length() && content[idx] != ',' && content[idx] != '}' && content[idx] != '\n' && content[idx] != '\r' && content[idx] != ' ') {
-                            valStr += content[idx];
-                            idx++;
-                        }
-                    }
-                    if (valStr == "bypass") {
-                        outConfig.keyHandlingMode = KeyHandlingMode::Bypass;
-                    } else if (valStr == "grab_only" || valStr == "grab-only" || valStr == "grabonly") {
-                        outConfig.keyHandlingMode = KeyHandlingMode::GrabOnly;
-                    } else if (valStr == "debounced" || valStr == "debounce" || valStr == "debouncer") {
-                        outConfig.keyHandlingMode = KeyHandlingMode::Debounced;
-                    }
-                }
-            }
-        }
+
         
         GLIDE_LOG(INFO, "Config", "Parsed local JSON configuration file successfully.");
     } else {
@@ -312,18 +282,7 @@ bool JsonConfigLoader::Load(const std::string& configFilePath, WrapperConfig& ou
         GLIDE_LOG(WARN, "Config", "Invalid MSAA sample count '" << original << "' requested. Defaulting to 1 (MSAA disabled).");
     }
 
-    if (const char* envKeyHandling = std::getenv("GLIDE_WRAPPER_KEY_HANDLING")) {
-        std::string val(envKeyHandling);
-        std::transform(val.begin(), val.end(), val.begin(), ::tolower);
-        if (val == "bypass") {
-            outConfig.keyHandlingMode = KeyHandlingMode::Bypass;
-        } else if (val == "grab_only" || val == "grab-only" || val == "grabonly") {
-            outConfig.keyHandlingMode = KeyHandlingMode::GrabOnly;
-        } else if (val == "debounced" || val == "debounce" || val == "debouncer") {
-            outConfig.keyHandlingMode = KeyHandlingMode::Debounced;
-        }
-        GLIDE_LOG(WARN, "Config", "Overrode Key Handling Mode via GLIDE_WRAPPER_KEY_HANDLING=" << val);
-    }
+
 
     return true;
 }

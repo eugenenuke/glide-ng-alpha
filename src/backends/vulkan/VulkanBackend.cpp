@@ -4,112 +4,7 @@
 #include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_vulkan.h>
 
-#if defined(__linux__)
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <dlfcn.h>
-
-// Undefine X11 macro pollution to prevent breaking other C++ headers
-#ifdef None
-#undef None
-#endif
-#ifdef Success
-#undef Success
-#endif
-
-// Binary-compatible layout of SDL 1.2's SysWMinfo structure on X11
-struct SDL12_SysWMinfo {
-  struct {
-    unsigned char major;
-    unsigned char minor;
-    unsigned char patch;
-  } version;
-  int subsystem;  // Expected to be SDL_SYSWM_X11 (1)
-  union {
-    struct {
-      Display* display;
-      Window window;
-    } x11;
-  } info;
-};
-typedef int (*PFN_SDL12_GetWMInfo)(SDL12_SysWMinfo* info);
-
-// Binary-compatible layout of SDL 1.2's keysym and event structures
-struct SDL12_keysym {
-  unsigned char scancode;
-  int sym;
-  int mod;
-  unsigned short unicode;
-};
-
-struct SDL12_KeyboardEvent {
-  unsigned char type;  // SDL_KEYDOWN (2) or SDL_KEYUP (3)
-  unsigned char which;
-  unsigned char state;  // SDL_PRESSED (1) or SDL_RELEASED (0)
-  unsigned char padding;
-  SDL12_keysym keysym;
-};
-
-union SDL12_Event {
-  unsigned char type;
-  SDL12_KeyboardEvent key;
-  unsigned char pad[24];  // SDL 1.2 events are exactly 24 bytes
-};
-
-typedef int (*PFN_SDL12_PushEvent)(void* event);
-
-static SDL12_Event TranslateSdl2ToSdl12Key(const SDL_Event& event2) {
-  SDL12_Event event12{};
-  event12.type = (event2.type == SDL_KEYDOWN) ? 2 : 3;
-  event12.key.type = event12.type;
-  event12.key.which = 0;
-  event12.key.state = (event2.key.state == SDL_PRESSED) ? 1 : 0;
-  event12.key.keysym.scancode = event2.key.keysym.scancode;
-
-  uint32_t sym2 = event2.key.keysym.sym;
-  uint32_t sym12 = sym2;  // Default fallback for matching ASCII values
-
-  switch (sym2) {
-    case SDLK_UP:
-      sym12 = 273;
-      break;
-    case SDLK_DOWN:
-      sym12 = 274;
-      break;
-    case SDLK_RIGHT:
-      sym12 = 275;
-      break;
-    case SDLK_LEFT:
-      sym12 = 276;
-      break;
-    case SDLK_LCTRL:
-      sym12 = 306;
-      break;
-    case SDLK_RCTRL:
-      sym12 = 305;
-      break;
-    case SDLK_LALT:
-      sym12 = 308;
-      break;
-    case SDLK_RALT:
-      sym12 = 307;
-      break;
-    case SDLK_LSHIFT:
-      sym12 = 304;
-      break;
-    case SDLK_RSHIFT:
-      sym12 = 303;
-      break;
-    default:
-      break;
-  }
-  event12.key.keysym.sym = sym12;
-  event12.key.keysym.mod = 0;
-  event12.key.keysym.unicode = event2.key.keysym.sym;
-  return event12;
-}
-
-#elif defined(_WIN32)
+#if defined(_WIN32)
 #include <windows.h>
 #endif
 
@@ -131,10 +26,7 @@ static SDL12_Event TranslateSdl2ToSdl12Key(const SDL_Event& event2) {
 #include "color_frag.spv.h"
 #include "color_vert.spv.h"
 
-extern "C" {
-extern volatile int g_glideWrapperSdlKeyHit;
-extern volatile int g_glideWrapperLastKey;
-}
+
 
 namespace GlideWrapper {
 
@@ -506,18 +398,7 @@ void VulkanBackend::Shutdown() {
   m_initialized = false;
 }
 
-#if defined(__linux__)
-static thread_local bool s_x11ErrorOccurred = false;
-static int VulkanX11ErrorHandler(Display* dpy, XErrorEvent* err) {
-  s_x11ErrorOccurred = true;
-  char msg[256];
-  XGetErrorText(dpy, err->error_code, msg, sizeof(msg));
-  std::cout << "Info: Vulkan X11 Error intercepted: " << msg 
-            << " (Opcode=" << (int)err->request_code 
-            << ", ResourceId=" << err->resourceid << ")" << std::endl;
-  return 0;
-}
-#endif
+
 
 bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
                                  uint32_t height, bool windowed) {
@@ -536,8 +417,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_headlessHeight = height;
   m_guestWidth = width;
   m_guestHeight = height;
-  m_realWindowWidth = width;
-  m_realWindowHeight = height;
+
   ResetState();
   m_headlessMode = true;  // Headless-driven for visual regression
 
@@ -671,14 +551,14 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   uint32_t samplesVal = (m_msaaSamples > 1) ? m_msaaSamples : 0;
 
   std::cout << "Info: InitialiseVulkanWindow(wnd=" << nativeWindowHandle
-            << ", res=" << width << "x" << height << ")\r\n";
+            << ", res=" << width << "x" << height << ")\n";
   std::cout << "Info: Host Vulkan Adapter: " << devName << " (Vulkan API "
             << (props.apiVersion >> 22) << "."
             << ((props.apiVersion >> 12) & 0x3FF) << "."
-            << (props.apiVersion & 0xFFF) << ")\r\n";
+            << (props.apiVersion & 0xFFF) << ")\n";
   std::cout << "Info: Pixel Format RGBA8888 " << depthStr << " nAux 0 nSamples "
-            << samplesVal << " " << samplesVal << "\r\n";
-  std::cout << "Info: Drawable Size: " << width << "x" << height << "\r\n"
+            << samplesVal << " " << samplesVal << "\n";
+  std::cout << "Info: Drawable Size: " << width << "x" << height << "\n"
             << std::flush;
 
   SetClipWindow(0, 0, width, height);
@@ -687,7 +567,6 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_sdlWindow = nullptr;
   m_sdlWindowOwnedByUs = false;
   bool presentationSuccess = false;
-  bool isHookedFailed = false;
 
   // --- PATH 0: Hijack Active SDL2 Window FIRST (Native Wayland / X11 Safety) ---
   SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
@@ -707,142 +586,14 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       } else {
         GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan swapchain on hijacked SDL2 window.");
         m_surface.reset();
-        isHookedFailed = true;
       }
     } else {
       GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan surface on hijacked SDL2 window: " << SDL_GetError());
-      isHookedFailed = true;
     }
-  }
-
-  if (!presentationSuccess && !isHookedFailed) {
-    if (nativeWindowHandle && !m_config.forceNoWindow) {
-    // --- PATH A: Direct Hooked Raw Binding (No SDL2) ---
-    m_isWindowHooked = true;
-    GLIDE_LOG(INFO, "Vulkan",
-              "Bypassing SDL2 window wrapping for native window: "
-                  << nativeWindowHandle);
-
-    bool surfaceCreated = false;
-
-#if defined(__linux__)
-    m_nativeDisplay = nullptr;
-    m_nativeDisplayOwnedByUs = false;
-    m_nativeWindow = nativeWindowHandle;
-
-    m_useX11BlitFallback = false;
-    m_x11GC = nullptr;
-    m_x11Visual = nullptr;
-    m_x11Depth = 0;
-
-    // 1. ALWAYS open our own private, dedicated X11 Display connection for blitting!
-    // This completely isolates our rendering pipeline from SDL's event connection,
-    // restoring 100% responsiveness to keyboard and mouse inputs.
-    m_nativeDisplay = XOpenDisplay(nullptr);
-    if (m_nativeDisplay) {
-      m_nativeDisplayOwnedByUs = true;
-      GLIDE_LOG(
-          INFO, "Vulkan",
-          "Opened private, isolated X11 Display connection for blitting.");
-    } else {
-      GLIDE_LOG(CRITICAL, "Vulkan",
-                "Failed to open private X11 Display connection!");
-    }
-
-    bool useHeadlessBlit = true; // Always use headless blitting for raw window hooks on Linux/X11!
-
-    if (m_nativeDisplay && !useHeadlessBlit) {
-      GLIDE_LOG(INFO, "Vulkan",
-                "Creating Vulkan Xlib surface directly from raw X11 Window...");
-      vk::XlibSurfaceCreateInfoKHR xlibInfo(
-          {}, m_nativeDisplay,
-          static_cast<::Window>(
-              reinterpret_cast<uintptr_t>(nativeWindowHandle)));
-      try {
-        m_surface = m_instance->createXlibSurfaceKHRUnique(xlibInfo);
-        surfaceCreated = true;
-      } catch (const std::exception& e) {
-        GLIDE_LOG(CRITICAL, "Vulkan",
-                  "Failed to create direct Xlib Vulkan surface: " << e.what());
-      }
-    } else if (!m_nativeDisplay) {
-      GLIDE_LOG(CRITICAL, "Vulkan",
-                "Failed to resolve X11 Display connection (all tiers failed)!");
-    }
-#elif defined(_WIN32)
-    GLIDE_LOG(INFO, "Vulkan",
-              "Creating Vulkan Win32 surface directly from raw HWND...");
-    HINSTANCE hInst = GetModuleHandle(nullptr);
-    vk::Win32SurfaceCreateInfoKHR win32Info(
-        {}, hInst, reinterpret_cast<HWND>(nativeWindowHandle));
-    try {
-      m_surface = m_instance->createWin32SurfaceKHRUnique(win32Info);
-      surfaceCreated = true;
-    } catch (const std::exception& e) {
-      GLIDE_LOG(CRITICAL, "Vulkan",
-                "Failed to create direct Win32 Vulkan surface: " << e.what());
-    }
-#endif
-
-    if (surfaceCreated) {
-      int actualWidth = width;
-      int actualHeight = height;
-
-      if (CreateSwapchain(actualWidth, actualHeight)) {
-        m_headlessMode = false;
-        presentationSuccess = true;
-      } else {
-        useHeadlessBlit = true; // Fallback to blit if swapchain failed
-      }
-    }
-
-    if (useHeadlessBlit) {
-#if defined(__linux__)
-      if (m_nativeDisplay && m_nativeWindow) {
-        m_useX11BlitFallback = true;
-        m_isWindowHooked = true;  // KEEP HOOKED!
-        m_sdlWindow = nullptr;    // DO NOT create a standalone window!
-
-        m_headlessWidth = width;
-        m_headlessHeight = height;
-        m_headlessMode = true;
-
-        // Destroy the surface since we won't present via Vulkan
-        m_surface.reset();
-
-        presentationSuccess = true;
-        std::cout << "Info: X11 Headless blitter queued for lazy initialization on first frame swap." << std::endl;
-      }
-#endif
-    }
-
-    // Set final hooked status
-    isHookedFailed = !presentationSuccess;
-
-    if (isHookedFailed) {
-      m_surface.reset();
-#if defined(__linux__)
-      if (m_nativeDisplay) {
-        if (m_nativeDisplayOwnedByUs) {
-          XCloseDisplay(m_nativeDisplay);
-        }
-        m_nativeDisplay = nullptr;
-      }
-      m_nativeDisplayOwnedByUs = false;
-#endif
-    }
-  }
   }
 
   // --- PATH B: Standalone SDL2 Window (or Fallback if Hooked Failed) ---
-  if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow) {
-    if (isHookedFailed) {
-      GLIDE_LOG(WARN, "Vulkan",
-                "Direct hooked binding failed. Falling back to standalone SDL2 "
-                "window...");
-      m_isWindowHooked = false;
-    }
-
+  if (!presentationSuccess && !m_config.forceNoWindow) {
     bool sdlReady = true;
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
       if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -941,7 +692,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_commandBuffer->begin(vk::CommandBufferBeginInfo(
       vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
 
-  RegisterAntiGrabFilter();
+
   m_windowAttached = true;
   return true;
 }
@@ -964,29 +715,7 @@ void VulkanBackend::DetachWindow() {
     m_sdlWindow = nullptr;
   }
   m_sdlWindowOwnedByUs = false;
-#if defined(__linux__)
-  if (m_x11GC && m_nativeDisplay) {
-    XFreeGC(reinterpret_cast<Display*>(m_nativeDisplay),
-            reinterpret_cast<GC>(m_x11GC));
-    m_x11GC = nullptr;
-  }
-  m_x11Visual = nullptr;
-  m_x11Depth = 0;
-  m_useX11BlitFallback = false;
 
-  if (m_nativeDisplay) {
-    if (m_nativeDisplayOwnedByUs) {
-      XCloseDisplay(m_nativeDisplay);
-      GLIDE_LOG(INFO, "Vulkan", "Closed owned X11 Display connection.");
-    } else {
-      GLIDE_LOG(
-          INFO, "Vulkan",
-          "Detached from shared host X11 Display connection (keeping open).");
-    }
-    m_nativeDisplay = nullptr;
-  }
-  m_nativeDisplayOwnedByUs = false;
-#endif
   if (m_sdlVideoInitializedByUs) {
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
     m_sdlVideoInitializedByUs = false;
@@ -1036,7 +765,7 @@ void VulkanBackend::DetachWindow() {
 
   m_windowAttached = false;
   m_headlessMode = false;
-  UnregisterAntiGrabFilter();
+
 }
 
 bool VulkanBackend::CreateSwapchain(uint32_t width, uint32_t height) {
@@ -1497,7 +1226,7 @@ bool VulkanBackend::SwapBuffers() {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_initialized || !m_windowAttached) return false;
 
-  ProcessPendingKeyReleases();
+
 
   // Flush any pending CPU LFB writes to the GPU active image before we
   // swap/present!
@@ -1505,7 +1234,7 @@ bool VulkanBackend::SwapBuffers() {
 
   // Enforce frame pacing and track frame timing using unified FrameTracker
   auto& tracker = TelemetryManager::GetInstance().GetFrameTracker();
-  tracker.MarkFrameEnd(m_useX11BlitFallback ? 0.0f : m_config.maxFps);
+  tracker.MarkFrameEnd(m_config.maxFps);
   tracker.MarkFrameStart();
 
   GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers");
@@ -1523,51 +1252,10 @@ bool VulkanBackend::SwapBuffers() {
         std::cout << "[Wrapper Event Telemetry] Polled key: type=" << event.type
                   << ", sym=" << event.key.keysym.sym
                   << ", state=" << (int)event.key.state << std::endl;
-#if defined(__linux__)
-        // Check if the host is running SDL 1.2
-        void* sdl12Handle = dlopen("libSDL-1.2.so.0", RTLD_LAZY | RTLD_NOLOAD);
-        if (sdl12Handle) {
-          auto* pushEvent12 = reinterpret_cast<PFN_SDL12_PushEvent>(
-              dlsym(sdl12Handle, "SDL_PushEvent"));
-          GLIDE_LOG(
-              INFO, "Vulkan",
-              "SDL 1.2 host detected. pushEvent12=" << (void*)pushEvent12);
-          std::cout
-              << "[Wrapper Event Telemetry] SDL 1.2 host detected. pushEvent12="
-              << (void*)pushEvent12 << std::endl;
-          if (pushEvent12) {
-            SDL12_Event event12 = TranslateSdl2ToSdl12Key(event);
-            GLIDE_LOG(INFO, "Vulkan",
-                      "Translated legacy key: type="
-                          << (int)event12.key.type
-                          << ", sym=" << event12.key.keysym.sym
-                          << ", state=" << (int)event12.key.state);
-            std::cout
-                << "[Wrapper Event Telemetry] Translated legacy key: type="
-                << (int)event12.key.type << ", sym=" << event12.key.keysym.sym
-                << ", state=" << (int)event12.key.state << std::endl;
-            int res = pushEvent12(&event12);
-            GLIDE_LOG(INFO, "Vulkan",
-                      "SDL 1.2 SDL_PushEvent returned: " << res);
-            std::cout << "[Wrapper Event Telemetry] SDL 1.2 push returned: "
-                      << res << std::endl;
-          }
-          dlclose(sdl12Handle);
-        } else {
-          // Host is SDL2: Push directly into the shared queue!
-          int res = SDL_PushEvent(&event);
-          GLIDE_LOG(INFO, "Vulkan", "SDL2 SDL_PushEvent returned: " << res);
-          std::cout << "[Wrapper Event Telemetry] SDL2 push returned: " << res
-                    << std::endl;
-        }
-#else
-        // Windows: Push directly into the shared queue (assuming same SDL2 DLL)
         int res = SDL_PushEvent(&event);
-        GLIDE_LOG(INFO, "Vulkan",
-                  "SDL2 (Windows) SDL_PushEvent returned: " << res);
-        std::cout << "[Wrapper Event Telemetry] SDL2 (Windows) push returned: "
-                  << res << std::endl;
-#endif
+        GLIDE_LOG(INFO, "Vulkan", "SDL2 SDL_PushEvent returned: " << res);
+        std::cout << "[Wrapper Event Telemetry] SDL2 push returned: " << res
+                  << std::endl;
       }
     }
   }
@@ -1776,139 +1464,7 @@ bool VulkanBackend::SwapBuffers() {
     vk::SubmitInfo submitInfo(0, nullptr, nullptr, 1, m_commandBuffer);
     m_graphicsQueue.submit(submitInfo, m_fences[m_currentFrameSlot].get());
 
-#if defined(__linux__)
-    if (m_useX11BlitFallback) {
-      GLIDE_PROFILE_SCOPE("Vulkan::X11BlitFallback_Present");
 
-      auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
-      auto win = reinterpret_cast<::Window>(
-          reinterpret_cast<uintptr_t>(m_nativeWindow));
-
-      // 1. Lazy-initialize X11 GC and query window attributes on the very first frame!
-      // Since games can swap buffers immediately after startup, we use a robust retry loop
-      // with short sleeps to wait for the X11 window to finish mapping and registering on the server.
-      if (m_x11GC == nullptr) {
-        GLIDE_LOG(INFO, "Vulkan", "Lazy-initializing X11 Blitter on first frame swap...");
-        std::cout << "Info: Lazy-initializing X11 Blitter on first frame swap..." << std::endl;
-
-        auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
-
-        XWindowAttributes attrs{};
-        Status status = 0;
-        for (int retry = 0; retry < 30; ++retry) {
-          s_x11ErrorOccurred = false;
-          XSync(dpy, False);
-          status = XGetWindowAttributes(dpy, win, &attrs);
-          XSync(dpy, False);
-          if (status != 0 && !s_x11ErrorOccurred) {
-            break;
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-
-        GC gc = nullptr;
-        if (status != 0 && !s_x11ErrorOccurred) {
-          XGCValues values;
-          values.graphics_exposures = False;
-          gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
-        }
-
-        XSync(dpy, False);
-        XSetErrorHandler(oldHandler);
-
-        if (status != 0 && gc != nullptr && !s_x11ErrorOccurred) {
-          m_x11Visual = attrs.visual;
-          m_x11Depth = attrs.depth;
-          m_x11GC = gc;
-          m_realWindowWidth = attrs.width;
-          m_realWindowHeight = attrs.height;
-          std::cout << "Info: X11 Blit Fallback lazy-initialized successfully. Window ID="
-                    << std::hex << win << std::dec
-                    << ", Resolution=" << m_realWindowWidth << "x" << m_realWindowHeight
-                    << ", Depth=" << m_x11Depth << std::endl;
-        } else {
-          GLIDE_LOG(CRITICAL, "Vulkan", "Failed to lazy-initialize X11 Blit Fallback!");
-          std::cout << "Error: Failed to lazy-initialize X11 Blit Fallback! Drawing will be disabled." << std::endl;
-          m_useX11BlitFallback = false;
-        }
-      }
-
-      // 2. Only perform blitting if GC is valid (lazy initialization succeeded!)
-      if (m_x11GC != nullptr) {
-        // Wait for the copy submission to complete so pixels are ready on CPU
-        {
-          GLIDE_PROFILE_SCOPE("Vulkan::X11BlitFallback_FenceWait");
-          if (m_device->waitForFences(1, &m_fences[m_currentFrameSlot].get(),
-                                      VK_TRUE,
-                                      UINT64_MAX) != vk::Result::eSuccess) {
-            GLIDE_LOG(CRITICAL, "Vulkan",
-                      "X11 Blit Fallback: Failed to wait for copy fence!");
-          }
-        }
-
-        void* pixels = m_gpuStagingMaps[m_currentFrameSlot];
-        uint32_t srcW = m_headlessWidth;
-        uint32_t srcH = m_headlessHeight;
-        uint32_t dstW = m_realWindowWidth;
-        uint32_t dstH = m_realWindowHeight;
-
-        char* blitData = reinterpret_cast<char*>(pixels);
-        uint32_t blitWidth = srcW;
-        uint32_t blitHeight = srcH;
-        uint32_t blitPitch = srcW * 4;
-
-        if (srcW != dstW || srcH != dstH) {
-          // Perform fast CPU-based nearest-neighbor scaling for resolution mismatches (e.g. 512x384 in 640x480 window)
-          m_vulkanResolvedBuffer.resize(dstW * dstH);
-          uint32_t* dstPixels = m_vulkanResolvedBuffer.data();
-          const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(pixels);
-
-          float scaleX = (float)srcW / dstW;
-          float scaleY = (float)srcH / dstH;
-
-#pragma omp parallel for if (dstH > 240)
-          for (uint32_t y = 0; y < dstH; y++) {
-            uint32_t srcY = (uint32_t)(y * scaleY);
-            if (srcY >= srcH) srcY = srcH - 1;
-            const uint32_t* srcRow = &srcPixels[srcY * srcW];
-            uint32_t* dstRow = &dstPixels[y * dstW];
-            for (uint32_t x = 0; x < dstW; x++) {
-              uint32_t srcX = (uint32_t)(x * scaleX);
-              if (srcX >= srcW) srcX = srcW - 1;
-              dstRow[x] = srcRow[srcX];
-            }
-          }
-
-          blitData = reinterpret_cast<char*>(m_vulkanResolvedBuffer.data());
-          blitWidth = dstW;
-          blitHeight = dstH;
-          blitPitch = dstW * 4;
-        }
-
-        XImage* ximage = XCreateImage(
-            reinterpret_cast<Display*>(m_nativeDisplay),
-            reinterpret_cast<Visual*>(m_x11Visual), m_x11Depth, ZPixmap, 0,
-            blitData, blitWidth, blitHeight,
-            32,        // Bitmap pad
-            blitPitch  // Bytes per line
-        );
-
-        if (ximage) {
-          XPutImage(reinterpret_cast<Display*>(m_nativeDisplay),
-                    reinterpret_cast<::Window>(
-                        reinterpret_cast<uintptr_t>(m_nativeWindow)),
-                    reinterpret_cast<GC>(m_x11GC), ximage, 0, 0,  // Source X, Y
-                    0, 0,  // Destination X, Y
-                    blitWidth, blitHeight);
-          XFlush(reinterpret_cast<Display*>(m_nativeDisplay));
-
-          // Free the XImage shell without freeing our mapped/resolved buffers
-          ximage->data = nullptr;
-          XDestroyImage(ximage);
-        }
-      }
-    }
-#endif
 
     // Advance to the next slot and setup recording immediately
     uint32_t nextSlot = (m_currentFrameSlot + 1) % 2;
@@ -2080,21 +1636,6 @@ bool VulkanBackend::CreateInstance() {
   vk::InstanceCreateInfo createInfo({}, &appInfo);
 
   std::vector<const char*> requiredExtensions;
-
-  auto addUniqueExtension = [&requiredExtensions](const char* extName) {
-    for (const auto& ext : requiredExtensions) {
-      if (std::strcmp(ext, extName) == 0) return;
-    }
-    requiredExtensions.push_back(extName);
-  };
-
-#if defined(__linux__)
-  addUniqueExtension(VK_KHR_SURFACE_EXTENSION_NAME);
-  addUniqueExtension(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-#elif defined(_WIN32)
-  addUniqueExtension(VK_KHR_SURFACE_EXTENSION_NAME);
-  addUniqueExtension(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-#endif
 
   // Load Vulkan instance extensions required by SDL2 for surface creation!
   bool shouldLoadExtensions = !m_config.forceNoWindow;

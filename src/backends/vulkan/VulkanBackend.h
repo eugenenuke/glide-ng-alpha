@@ -8,28 +8,10 @@
 #ifndef VK_USE_PLATFORM_WIN32_KHR
 #define VK_USE_PLATFORM_WIN32_KHR
 #endif
-#elif defined(__linux__)
-#ifndef VK_USE_PLATFORM_XLIB_KHR
-#define VK_USE_PLATFORM_XLIB_KHR
-#endif
 #endif
 #include <vulkan/vulkan.hpp>
 
-// Undefine X11 macro pollution to prevent breaking other C++ headers
-#ifdef None
-#undef None
-#endif
-#ifdef Success
-#undef Success
-#endif
-
 #include "backends/SoftwareBackendBase.h"
-
-#if defined(__linux__)
-struct _XDisplay;
-typedef struct _XDisplay Display;
-struct _XGC;
-#endif
 
 namespace GlideWrapper {
 
@@ -376,13 +358,7 @@ class VulkanBackend : public SoftwareBackendBase {
   bool m_isWindowHooked{false};
   bool m_sdlVideoInitializedByUs{false};
   bool m_sdlWindowOwnedByUs{false};
-#if defined(__linux__)
-  Display* m_nativeDisplay{nullptr};
-  bool m_nativeDisplayOwnedByUs{false};
-  struct _XGC* m_x11GC{nullptr};
-  Visual* m_x11Visual{nullptr};
-  int m_x11Depth{0};
-#endif
+
   vk::UniqueSurfaceKHR
       m_surface;  // Vulkan presentation surface associated with m_sdlWindow
 
@@ -482,10 +458,7 @@ class VulkanBackend : public SoftwareBackendBase {
   uint8_t m_lutG[256];
   uint8_t m_lutB[256];
 
-  // X11 Blit Fallback window scaling state
-  uint32_t m_realWindowWidth{0};
-  uint32_t m_realWindowHeight{0};
-  std::vector<uint32_t> m_vulkanResolvedBuffer;
+
 };
 
 }  // namespace GlideWrapper

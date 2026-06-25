@@ -1,12 +1,6 @@
 #include "SoftwareBackend.h"
 
-#if defined(DIRECT_SDL12)
-#include <SDL/SDL.h>
-#elif defined(DIRECT_SDL2)
 #include <SDL2/SDL.h>
-#else
-#include <SDL2/SDL.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -24,72 +18,6 @@
 
 #ifdef _OPENMP
 #include <omp.h>
-#endif
-
-#if defined(__linux__)
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <dlfcn.h>
-
-// Undefine X11 macro pollution to prevent breaking other C++ headers
-#ifdef None
-#undef None
-#endif
-#ifdef Success
-#undef Success
-#endif
-#ifdef True
-#undef True
-#endif
-#ifdef False
-#undef False
-#endif
-
-struct SDL12_PixelFormat {
-  void* palette;
-  uint8_t BitsPerPixel;
-  uint8_t BytesPerPixel;
-  uint8_t Rloss, Gloss, Bloss, Aloss;
-  uint8_t Rshift, Gshift, Bshift, Ashift;
-  uint32_t Rmask, Gmask, Bmask, Amask;
-};
-
-struct SDL12_Surface {
-  uint32_t flags;
-  SDL12_PixelFormat* format;
-  int w, h;
-  uint16_t pitch;
-  void* pixels;
-};
-
-typedef SDL12_Surface* (*PFN_SDL12_GetVideoSurface)(void);
-typedef void (*PFN_SDL12_UpdateRect)(SDL12_Surface* screen, int32_t x,
-                                     int32_t y, int32_t w, int32_t h);
-typedef int (*PFN_SDL12_LockSurface)(SDL12_Surface* surface);
-typedef void (*PFN_SDL12_UnlockSurface)(SDL12_Surface* surface);
-struct SDL12_ActiveEvent {
-  uint8_t type;
-  uint8_t gain;
-  uint8_t state;
-};
-
-struct SDL12_KeyboardEvent {
-  uint8_t type;
-  uint8_t which;
-  uint8_t state;
-  struct {
-    uint8_t scancode;
-    uint32_t sym;
-    uint32_t mod;
-    uint16_t unicode;
-  } keysym;
-};
-
-union SDL12_Event {
-  uint8_t type;
-  SDL12_ActiveEvent active;
-  SDL12_KeyboardEvent key;
-};
 #endif
 
 namespace GlideWrapper {
@@ -809,71 +737,7 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 
   m_headlessPixelMap = m_cpuBuffers[m_backBufferIdx].data();
 
-#if defined(__linux__)
-  m_x11Display = nullptr;
-  m_x11Window = 0;
-  m_x11GC = nullptr;
-  m_x11Visual = nullptr;
-  m_x11Depth = 0;
-  m_x11DisplayOwned = false;
-  m_useX11BlitFallback = false;
-
-#if !defined(DIRECT_SDL12) && !defined(DIRECT_SDL2)
-  if (nativeWindowHandle) {
-    m_x11Window = reinterpret_cast<unsigned long>(nativeWindowHandle);
-    Display* dpy = XOpenDisplay(nullptr);
-    if (dpy) {
-      m_x11Display = dpy;
-      m_x11DisplayOwned = true;
-
-      XSync(dpy, false);
-
-      XWindowAttributes attrs;
-      Status status = XGetWindowAttributes(dpy, m_x11Window, &attrs);
-      if (status != 0) {
-        m_x11Visual = attrs.visual;
-        m_x11Depth = attrs.depth;
-        m_realWindowWidth = attrs.width;
-        m_realWindowHeight = attrs.height;
-
-        XGCValues values;
-        values.graphics_exposures = false;
-        m_x11GC = XCreateGC(dpy, m_x11Window, GCGraphicsExposures, &values);
-
-        if (m_x11GC) {
-          m_useX11BlitFallback = true;
-          GLIDE_LOG(INFO, "Software",
-                    "Direct X11 presentation initialized. Window ID="
-                        << m_x11Window << ", Resolution=" << m_realWindowWidth
-                        << "x" << m_realWindowHeight
-                        << ", Depth=" << m_x11Depth);
-          std::cout
-              << "[Wrapper] Direct X11 presentation initialized. Window ID="
-              << m_x11Window << ", Resolution=" << m_realWindowWidth << "x"
-              << m_realWindowHeight << ", Depth=" << m_x11Depth << std::endl;
-        } else {
-          GLIDE_LOG(WARN, "Software",
-                    "Failed to create X11 GC for direct blitting");
-        }
-      } else {
-        GLIDE_LOG(WARN, "Software",
-                  "Failed to query attributes for X11 window " << m_x11Window);
-      }
-
-      if (!m_useX11BlitFallback) {
-        XCloseDisplay(dpy);
-        m_x11Display = nullptr;
-        m_x11DisplayOwned = false;
-      }
-    } else {
-      GLIDE_LOG(WARN, "Software",
-                "Failed to open X11 Display for direct blitting");
-    }
-  }
-#endif
-#endif
-
-#if defined(DIRECT_SDL12) || defined(DIRECT_SDL2)
+#if defined(DIRECT_SDL2)
   m_sdlWindow = nullptr;
   m_sdlWindowOwned = false;
   m_sdlRenderer = nullptr;
@@ -881,7 +745,6 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_sdlTexture = nullptr;
 
   if (nativeWindowHandle) {
-#if defined(DIRECT_SDL2)
     SDL_Window* sdlWindow = SDL_GL_GetCurrentWindow();
     if (sdlWindow) {
       GLIDE_LOG(INFO, "Software", "Hijacked existing SDL2 window: " << sdlWindow);
@@ -933,9 +796,6 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
         }
       }
     }
-#else
-    GLIDE_LOG(INFO, "Software", "Attached to native SDL 1.2 window (handle=" << nativeWindowHandle << ")");
-#endif
   } else {
     // No window injection! Create our own window/surface.
     if (SDL_WasInit(SDL_INIT_VIDEO) == 0) {
@@ -944,7 +804,6 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
         return false;
       }
     }
-#if defined(DIRECT_SDL2)
     SDL_Window* window = SDL_CreateWindow(
         "Glide Software Rasterizer (SDL2)", SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED, width, height, SDL_WINDOW_SHOWN);
@@ -973,23 +832,10 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       GLIDE_LOG(CRITICAL, "Software", "Failed to create own SDL2 window: " << SDL_GetError());
       return false;
     }
-#else
-    SDL_Surface* screen = SDL_SetVideoMode(width, height, 32, SDL_SWSURFACE);
-    if (screen) {
-      m_sdlWindow = screen;
-      m_sdlWindowOwned = true;
-      GLIDE_LOG(INFO, "Software", "Created own native SDL 1.2 window surface: " << screen);
-    } else {
-      GLIDE_LOG(CRITICAL, "Software", "Failed to set SDL 1.2 video mode: " << SDL_GetError());
-      return false;
-    }
-#endif
   }
 #endif
 
   m_windowAttached = true;
-
-  RegisterAntiGrabFilter();
 
   return true;
 }
@@ -1002,26 +848,6 @@ void SoftwareBackend::DetachWindow() {
     m_allocatedBuffer = false;
   }
 
-#if defined(__linux__)
-  if (m_x11GC && m_x11Display) {
-    XFreeGC(reinterpret_cast<Display*>(m_x11Display),
-            reinterpret_cast<GC>(m_x11GC));
-    m_x11GC = nullptr;
-  }
-  if (m_x11Display) {
-    if (m_x11DisplayOwned) {
-      XCloseDisplay(reinterpret_cast<Display*>(m_x11Display));
-      GLIDE_LOG(INFO, "Software", "Closed owned X11 Display connection.");
-    }
-    m_x11Display = nullptr;
-  }
-  m_x11DisplayOwned = false;
-  m_x11Window = 0;
-  m_x11Visual = nullptr;
-  m_x11Depth = 0;
-  m_useX11BlitFallback = false;
-#endif
-#if defined(DIRECT_SDL12) || defined(DIRECT_SDL2)
 #if defined(DIRECT_SDL2)
   if (m_sdlTexture) {
     SDL_DestroyTexture(reinterpret_cast<SDL_Texture*>(m_sdlTexture));
@@ -1040,13 +866,8 @@ void SoftwareBackend::DetachWindow() {
     m_sdlWindow = nullptr;
   }
   m_sdlRendererOwned = false;
-#else
-  m_sdlWindow = nullptr;
-#endif
   m_sdlWindowOwned = false;
 #endif
-
-  UnregisterAntiGrabFilter();
 
   m_windowAttached = false;
   m_headlessMode = false;
@@ -1057,10 +878,6 @@ bool SoftwareBackend::SwapBuffers() {
   FlushBins();
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_initialized || !m_windowAttached) return false;
-
-  ProcessKeySimulation();
-
-  ProcessPendingKeyReleases();
 
   GLIDE_LOG(DEBUG, "Software", "Executing SwapBuffers presentation dispatch.");
 
@@ -1097,45 +914,8 @@ bool SoftwareBackend::SwapBuffers() {
     }
   }
 
-  // 3. Present the newly swapped front buffer (which holds the completed frame)
-  typedef int (*PFN_SDL12_WM_GrabInput)(int mode);
-  static PFN_SDL12_GetVideoSurface local_GetVideoSurface = nullptr;
-  static PFN_SDL12_UpdateRect local_UpdateRect = nullptr;
-  static PFN_SDL12_LockSurface local_LockSurface = nullptr;
-  static PFN_SDL12_UnlockSurface local_UnlockSurface = nullptr;
-  static PFN_SDL12_WM_GrabInput local_WM_GrabInput = nullptr;
-  static bool resolvedSdl12 = false;
-
-  if (!resolvedSdl12) {
-    // Resolve dynamically from the active process space!
-    local_GetVideoSurface = reinterpret_cast<PFN_SDL12_GetVideoSurface>(
-        dlsym(RTLD_DEFAULT, "SDL_GetVideoSurface"));
-    local_UpdateRect = reinterpret_cast<PFN_SDL12_UpdateRect>(
-        dlsym(RTLD_DEFAULT, "SDL_UpdateRect"));
-    local_LockSurface = reinterpret_cast<PFN_SDL12_LockSurface>(
-        dlsym(RTLD_DEFAULT, "SDL_LockSurface"));
-    local_UnlockSurface = reinterpret_cast<PFN_SDL12_UnlockSurface>(
-        dlsym(RTLD_DEFAULT, "SDL_UnlockSurface"));
-    local_WM_GrabInput = reinterpret_cast<PFN_SDL12_WM_GrabInput>(
-        dlsym(RTLD_DEFAULT, "SDL_WM_GrabInput"));
-    resolvedSdl12 = true;
-  }
-
-  // Forcefully bypass any keyboard/mouse grab!
-  if (local_WM_GrabInput) {
-    int currentGrab = local_WM_GrabInput(-1);  // SDL_GRAB_QUERY
-    if (currentGrab != 0) {                    // Not SDL_GRAB_OFF
-      local_WM_GrabInput(0);                   // Force SDL_GRAB_OFF
-      std::cout << "[Wrapper-GrabBypass] FORCED grab release! (Was: "
-                << currentGrab << ")" << std::endl;
-    }
-  }
-
-  bool presented = false;
-
 #if defined(DIRECT_SDL2)
-  if (!presented && m_sdlRenderer && m_sdlTexture &&
-      !m_cpuBuffers[m_frontBufferIdx].empty()) {
+  if (m_sdlRenderer && m_sdlTexture && !m_cpuBuffers[m_frontBufferIdx].empty()) {
     GLIDE_PROFILE_SCOPE("Software::Sdl2Present");
     SDL_Renderer* renderer = reinterpret_cast<SDL_Renderer*>(m_sdlRenderer);
     SDL_Texture* texture = reinterpret_cast<SDL_Texture*>(m_sdlTexture);
@@ -1213,299 +993,11 @@ bool SoftwareBackend::SwapBuffers() {
       SDL_RenderClear(renderer);
       SDL_RenderCopy(renderer, texture, nullptr, nullptr);
       SDL_RenderPresent(renderer);
-
-      presented = true;
     } else {
       GLIDE_LOG(WARN, "Software", "Failed to lock SDL_Texture: " << SDL_GetError());
     }
   }
 #endif
-
-#if defined(__linux__)
-  if (!presented && m_useX11BlitFallback && m_x11Display &&
-      !m_cpuBuffers[m_frontBufferIdx].empty()) {
-    GLIDE_PROFILE_SCOPE("Software::X11Blit");
-    auto* dpy = reinterpret_cast<Display*>(m_x11Display);
-    auto win = static_cast<::Window>(m_x11Window);
-
-    // Resolve SSAA if active
-    uint32_t srcW = m_headlessWidth;
-    uint32_t srcH = m_headlessHeight;
-    const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(
-        m_cpuBuffers[m_frontBufferIdx].data());
-
-    if (m_ssaaScale > 1) {
-      srcW /= m_ssaaScale;
-      srcH /= m_ssaaScale;
-      m_resolvedBuffer.resize(srcW * srcH * 4);
-      uint32_t* resolvedData =
-          reinterpret_cast<uint32_t*>(m_resolvedBuffer.data());
-      const uint32_t* fullSrc = reinterpret_cast<const uint32_t*>(
-          m_cpuBuffers[m_frontBufferIdx].data());
-
-#pragma omp parallel for collapse(2) if (srcH * srcW > 64000)
-      for (uint32_t y = 0; y < srcH; ++y) {
-        for (uint32_t x = 0; x < srcW; ++x) {
-          uint32_t r = 0, g = 0, b = 0, a = 0;
-          for (uint32_t dy = 0; dy < 2; ++dy) {
-            for (uint32_t dx = 0; dx < 2; ++dx) {
-              uint32_t srcIdx = (2 * y + dy) * m_headlessWidth + (2 * x + dx);
-              uint32_t p = fullSrc[srcIdx];
-              a += (p >> 24) & 0xFF;
-              r += (p >> 16) & 0xFF;
-              g += (p >> 8) & 0xFF;
-              b += p & 0xFF;
-            }
-          }
-          a /= 4;
-          r /= 4;
-          g /= 4;
-          b /= 4;
-          resolvedData[y * srcW + x] = (a << 24) | (r << 16) | (g << 8) | b;
-        }
-      }
-      srcPixels = resolvedData;
-    }
-
-    uint32_t dstW = m_realWindowWidth;
-    uint32_t dstH = m_realWindowHeight;
-
-    const char* blitData = reinterpret_cast<const char*>(srcPixels);
-    uint32_t blitWidth = srcW;
-    uint32_t blitHeight = srcH;
-    uint32_t blitPitch = srcW * 4;
-
-    if (srcW != dstW || srcH != dstH) {
-      m_resolvedBuffer.resize(dstW * dstH * 4);
-      uint32_t* dstPixels =
-          reinterpret_cast<uint32_t*>(m_resolvedBuffer.data());
-
-      float scaleX = (float)srcW / dstW;
-      float scaleY = (float)srcH / dstH;
-
-#pragma omp parallel for if (dstH > 240)
-      for (uint32_t y = 0; y < dstH; y++) {
-        uint32_t srcY = (uint32_t)(y * scaleY);
-        if (srcY >= srcH) srcY = srcH - 1;
-        const uint32_t* srcRow = &srcPixels[srcY * srcW];
-        uint32_t* dstRow = &dstPixels[y * dstW];
-        for (uint32_t x = 0; x < dstW; x++) {
-          uint32_t srcX = (uint32_t)(x * scaleX);
-          if (srcX >= srcW) srcX = srcW - 1;
-          dstRow[x] = srcRow[srcX];
-        }
-      }
-
-      blitData = reinterpret_cast<const char*>(m_resolvedBuffer.data());
-      blitWidth = dstW;
-      blitHeight = dstH;
-      blitPitch = dstW * 4;
-    }
-
-    XImage* ximage = XCreateImage(
-        dpy, reinterpret_cast<Visual*>(m_x11Visual), m_x11Depth, ZPixmap, 0,
-        const_cast<char*>(blitData), blitWidth, blitHeight, 32, blitPitch);
-
-    if (ximage) {
-      XPutImage(dpy, win, reinterpret_cast<GC>(m_x11GC), ximage, 0, 0, 0, 0,
-                blitWidth, blitHeight);
-      XFlush(dpy);
-
-      ximage->data = nullptr;
-      XDestroyImage(ximage);
-    }
-    presented = true;
-  }
-#endif
-
-#if defined(DIRECT_SDL12)
-  if (!presented && !m_cpuBuffers[m_frontBufferIdx].empty()) {
-    SDL_Surface* screen = SDL_GetVideoSurface();
-    if (screen) {
-      if (screen->format && screen->format->BytesPerPixel != 4) {
-        static bool warnedOnce = false;
-        if (!warnedOnce) {
-          std::cerr << "[Wrapper] WARNING: SDL 1.2 surface is not 32-bit (bpp="
-                    << (int)screen->format->BytesPerPixel
-                    << "). Bypassing presentation to prevent heap corruption!\n"
-                    << std::flush;
-          warnedOnce = true;
-        }
-        return true;
-      }
-
-      if (SDL_MUSTLOCK(screen)) {
-        SDL_LockSurface(screen);
-      }
-
-      const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(
-          m_cpuBuffers[m_frontBufferIdx].data());
-      uint32_t* dstPixels = reinterpret_cast<uint32_t*>(screen->pixels);
-
-      uint32_t srcW = m_headlessWidth;
-      uint32_t srcH = m_headlessHeight;
-      uint32_t dstW = screen->w;
-      uint32_t dstH = screen->h;
-
-      if (m_ssaaScale > 1) {
-        srcW /= m_ssaaScale;
-        srcH /= m_ssaaScale;
-        m_resolvedBuffer.resize(srcW * srcH * 4);
-        uint32_t* resolvedData =
-            reinterpret_cast<uint32_t*>(m_resolvedBuffer.data());
-        const uint32_t* fullSrc = reinterpret_cast<const uint32_t*>(
-            m_cpuBuffers[m_frontBufferIdx].data());
-
-#pragma omp parallel for collapse(2) if (srcH * srcW > 64000)
-        for (uint32_t y = 0; y < srcH; ++y) {
-          for (uint32_t x = 0; x < srcW; ++x) {
-            uint32_t r = 0, g = 0, b = 0, a = 0;
-            for (uint32_t dy = 0; dy < 2; ++dy) {
-              for (uint32_t dx = 0; dx < 2; ++dx) {
-                uint32_t srcIdx = (2 * y + dy) * m_headlessWidth + (2 * x + dx);
-                uint32_t p = fullSrc[srcIdx];
-                a += (p >> 24) & 0xFF;
-                r += (p >> 16) & 0xFF;
-                g += (p >> 8) & 0xFF;
-                b += p & 0xFF;
-              }
-            }
-            a /= 4;
-            r /= 4;
-            g /= 4;
-            b /= 4;
-            resolvedData[y * srcW + x] = (a << 24) | (r << 16) | (g << 8) | b;
-          }
-        }
-        srcPixels = resolvedData;
-      }
-
-      uint32_t dstPitchWords = screen->pitch / 4;
-      if (srcW == dstW && srcH == dstH) {
-        for (uint32_t y = 0; y < srcH; y++) {
-          std::memcpy(&dstPixels[y * dstPitchWords], &srcPixels[y * srcW],
-                      srcW * 4);
-        }
-      } else {
-        float scaleX = (float)srcW / dstW;
-        float scaleY = (float)srcH / dstH;
-#pragma omp parallel for if (dstH > 240)
-        for (uint32_t y = 0; y < dstH; y++) {
-          uint32_t srcY = (uint32_t)(y * scaleY);
-          if (srcY >= srcH) srcY = srcH - 1;
-          const uint32_t* srcRow = &srcPixels[srcY * srcW];
-          uint32_t* dstRow = &dstPixels[y * dstPitchWords];
-          for (uint32_t x = 0; x < dstW; x++) {
-            uint32_t srcX = (uint32_t)(x * scaleX);
-            if (srcX >= srcW) srcX = srcW - 1;
-            dstRow[x] = srcRow[srcX];
-          }
-        }
-      }
-
-      if (SDL_MUSTLOCK(screen)) {
-        SDL_UnlockSurface(screen);
-      }
-
-      SDL_UpdateRect(screen, 0, 0, 0, 0);
-      presented = true;
-    }
-  }
-#endif
-
-  if (!presented && local_GetVideoSurface && local_UpdateRect &&
-      !m_cpuBuffers[m_frontBufferIdx].empty()) {
-    SDL12_Surface* screen = local_GetVideoSurface();
-    if (screen) {
-      if (screen->format && screen->format->BytesPerPixel != 4) {
-        static bool warnedOnce = false;
-        if (!warnedOnce) {
-          std::cerr << "[Wrapper] WARNING: SDL 1.2 surface is not 32-bit (bpp="
-                    << (int)screen->format->BytesPerPixel
-                    << "). Bypassing presentation to prevent heap corruption!\n"
-                    << std::flush;
-          warnedOnce = true;
-        }
-        return true;
-      }
-
-      if (local_LockSurface) {
-        local_LockSurface(screen);
-      }
-
-      const uint32_t* srcPixels = reinterpret_cast<const uint32_t*>(
-          m_cpuBuffers[m_frontBufferIdx].data());
-      uint32_t* dstPixels = reinterpret_cast<uint32_t*>(screen->pixels);
-
-      uint32_t srcW = m_headlessWidth;
-      uint32_t srcH = m_headlessHeight;
-      uint32_t dstW = screen->w;
-      uint32_t dstH = screen->h;
-
-      // Resolve SSAA if active (by downsampling 2x2 to 1x1) before blitting!
-      if (m_ssaaScale > 1) {
-        srcW /= m_ssaaScale;
-        srcH /= m_ssaaScale;
-        m_resolvedBuffer.resize(srcW * srcH);
-        uint32_t* resolvedData =
-            reinterpret_cast<uint32_t*>(m_resolvedBuffer.data());
-        const uint32_t* fullSrc = reinterpret_cast<const uint32_t*>(
-            m_cpuBuffers[m_frontBufferIdx].data());
-
-#pragma omp parallel for collapse(2) if (srcH * srcW > 64000)
-        for (uint32_t y = 0; y < srcH; ++y) {
-          for (uint32_t x = 0; x < srcW; ++x) {
-            uint32_t r = 0, g = 0, b = 0, a = 0;
-            for (uint32_t dy = 0; dy < 2; ++dy) {
-              for (uint32_t dx = 0; dx < 2; ++dx) {
-                uint32_t srcIdx = (2 * y + dy) * m_headlessWidth + (2 * x + dx);
-                uint32_t p = fullSrc[srcIdx];
-                a += (p >> 24) & 0xFF;
-                r += (p >> 16) & 0xFF;
-                g += (p >> 8) & 0xFF;
-                b += p & 0xFF;
-              }
-            }
-            a /= 4;
-            r /= 4;
-            g /= 4;
-            b /= 4;
-            resolvedData[y * srcW + x] = (a << 24) | (r << 16) | (g << 8) | b;
-          }
-        }
-        srcPixels = resolvedData;
-      }
-
-      uint32_t dstPitchWords = screen->pitch / 4;
-      if (srcW == dstW && srcH == dstH) {
-        for (uint32_t y = 0; y < srcH; y++) {
-          std::memcpy(&dstPixels[y * dstPitchWords], &srcPixels[y * srcW],
-                      srcW * 4);
-        }
-      } else {
-        float scaleX = (float)srcW / dstW;
-        float scaleY = (float)srcH / dstH;
-#pragma omp parallel for if (dstH > 240)
-        for (uint32_t y = 0; y < dstH; y++) {
-          uint32_t srcY = (uint32_t)(y * scaleY);
-          if (srcY >= srcH) srcY = srcH - 1;
-          const uint32_t* srcRow = &srcPixels[srcY * srcW];
-          uint32_t* dstRow = &dstPixels[y * dstPitchWords];
-          for (uint32_t x = 0; x < dstW; x++) {
-            uint32_t srcX = (uint32_t)(x * scaleX);
-            if (srcX >= srcW) srcX = srcW - 1;
-            dstRow[x] = srcRow[srcX];
-          }
-        }
-      }
-
-      if (local_UnlockSurface) {
-        local_UnlockSurface(screen);
-      }
-
-      local_UpdateRect(screen, 0, 0, 0, 0);
-    }
-  }
 
   return true;
 }
@@ -4742,15 +4234,3 @@ SoftwareBackend::RasterizeTriangleLoopsSIMD<true, true, true, false>(
 
 }  // namespace GlideWrapper
 
-#if defined(__linux__) && !defined(DIRECT_SDL12)
-extern "C" {
-int SDL_WM_GrabInput(int mode) {
-  if (mode == 1) {  // Only log when an active grab is requested!
-    std::cout << "[Wrapper-GrabOverride] INTERCEPTED SDL_WM_GrabInput(1) -> "
-                 "Forcing SDL_GRAB_OFF (0) to prevent RDP grab-break conflicts!"
-              << std::endl;
-  }
-  return 0;  // Force SDL_GRAB_OFF
-}
-}
-#endif
