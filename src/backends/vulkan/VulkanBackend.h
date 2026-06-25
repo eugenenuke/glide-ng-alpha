@@ -375,6 +375,7 @@ class VulkanBackend : public SoftwareBackendBase {
   bool m_windowShown{false};
   bool m_isWindowHooked{false};
   bool m_sdlVideoInitializedByUs{false};
+  bool m_sdlWindowOwnedByUs{false};
 #if defined(__linux__)
   Display* m_nativeDisplay{nullptr};
   bool m_nativeDisplayOwnedByUs{false};

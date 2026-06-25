@@ -107,6 +107,8 @@ class OpenGLESBackend : public SoftwareBackendBase {
   bool m_windowShown{false};
   bool m_isWindowHooked{false};
   bool m_sdlVideoInitializedByUs{false};
+  bool m_sdlWindowOwnedByUs{false};
+  bool m_glContextOwnedByUs{false};
 
   // GLES 3.2 presentation resources for streaming our software pixel map
   uint32_t m_glTexture{0};  // GLuint

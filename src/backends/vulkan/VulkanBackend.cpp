@@ -680,10 +680,38 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 
   m_isWindowHooked = false;
   m_sdlWindow = nullptr;
+  m_sdlWindowOwnedByUs = false;
   bool presentationSuccess = false;
   bool isHookedFailed = false;
 
-  if (nativeWindowHandle && !m_config.forceNoWindow) {
+  // --- PATH 0: Hijack Active SDL2 Window FIRST (Native Wayland / X11 Safety) ---
+  SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
+  if (hijackedWin && !m_config.forceNoWindow) {
+    GLIDE_LOG(INFO, "Vulkan", "Hijacking active SDL2 window: " << hijackedWin);
+    m_sdlWindow = hijackedWin;
+    m_sdlWindowOwnedByUs = false;
+    m_isWindowHooked = true;
+
+    VkSurfaceKHR rawSurface = nullptr;
+    if (SDL_Vulkan_CreateSurface(hijackedWin, m_instance.get(), &rawSurface)) {
+      m_surface = vk::UniqueSurfaceKHR(rawSurface, m_instance.get());
+      if (CreateSwapchain(width, height)) {
+        presentationSuccess = true;
+        m_headlessMode = false;
+        GLIDE_LOG(INFO, "Vulkan", "Successfully initialized Vulkan swapchain on hijacked SDL2 window.");
+      } else {
+        GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan swapchain on hijacked SDL2 window.");
+        m_surface.reset();
+        isHookedFailed = true;
+      }
+    } else {
+      GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan surface on hijacked SDL2 window: " << SDL_GetError());
+      isHookedFailed = true;
+    }
+  }
+
+  if (!presentationSuccess && !isHookedFailed) {
+    if (nativeWindowHandle && !m_config.forceNoWindow) {
     // --- PATH A: Direct Hooked Raw Binding (No SDL2) ---
     m_isWindowHooked = true;
     GLIDE_LOG(INFO, "Vulkan",
@@ -891,6 +919,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       isHookedFailed = true;
     }
   }
+  }
 
   // --- PATH B: Standalone SDL2 Window (or Fallback if Hooked Failed) ---
   if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow) {
@@ -928,6 +957,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
           int actualHeight = height * scale;
           if (CreateSwapchain(actualWidth, actualHeight)) {
             m_sdlWindow = win;
+            m_sdlWindowOwnedByUs = true;
             m_headlessMode = false;
             presentationSuccess = true;
             GLIDE_LOG(INFO, "Vulkan",
@@ -1015,9 +1045,12 @@ void VulkanBackend::DetachWindow() {
   DestroySwapchain();
   m_surface.reset();
   if (m_sdlWindow) {
-    SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+    if (m_sdlWindowOwnedByUs) {
+      SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+    }
     m_sdlWindow = nullptr;
   }
+  m_sdlWindowOwnedByUs = false;
 #if defined(__linux__)
   if (m_x11GC && m_nativeDisplay) {
     XFreeGC(reinterpret_cast<Display*>(m_nativeDisplay),

@@ -134,6 +134,7 @@ class SoftwareBackend : public SoftwareBackendBase {
   void* m_sdlWindow{nullptr};    // SDL_Window* or SDL_Surface*
   bool m_sdlWindowOwned{false};
   void* m_sdlRenderer{nullptr};  // SDL_Renderer* (SDL2 only)
+  bool m_sdlRendererOwned{false}; // SDL_Renderer* ownership (SDL2 only)
   void* m_sdlTexture{nullptr};   // SDL_Texture* (SDL2 only)
 #endif
 };

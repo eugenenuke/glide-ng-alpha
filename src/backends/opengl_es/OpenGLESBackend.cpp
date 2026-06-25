@@ -609,6 +609,25 @@ bool OpenGLESBackend::ReadLFB(uint32_t buffer, uint32_t srcX, uint32_t srcY,
 bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
                                       uint32_t height, bool windowed) {
   m_sdlVideoInitializedByUs = false;
+  m_sdlWindowOwnedByUs = false;
+  m_glContextOwnedByUs = false;
+
+  // --- PATH 0: Hijack Active SDL2 Window and OpenGL Context FIRST (Wayland Safety) ---
+  SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
+  SDL_GLContext hijackedCtx = SDL_GL_GetCurrentContext();
+  if (hijackedWin && hijackedCtx && !m_config.forceNoWindow) {
+    GLIDE_LOG(INFO, "GLES", "Hijacking active SDL2 window (" << hijackedWin << ") and context (" << hijackedCtx << ")");
+    m_sdlWindow = hijackedWin;
+    m_glContext = hijackedCtx;
+    m_sdlWindowOwnedByUs = false;
+    m_glContextOwnedByUs = false;
+    m_isWindowHooked = true;
+    return true;
+  }
+
+  // Set default ownership for newly created resources in the fallback path
+  m_sdlWindowOwnedByUs = true;
+  m_glContextOwnedByUs = true;
   if (!SDL_WasInit(SDL_INIT_VIDEO)) {
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0) {
       GLIDE_LOG(CRITICAL, "GLES",
@@ -964,13 +983,19 @@ void OpenGLESBackend::DestroyGLContext() {
   }
 
   if (m_glContext) {
-    SDL_GL_DeleteContext(reinterpret_cast<SDL_GLContext>(m_glContext));
+    if (m_glContextOwnedByUs) {
+      SDL_GL_DeleteContext(reinterpret_cast<SDL_GLContext>(m_glContext));
+    }
     m_glContext = nullptr;
   }
   if (m_sdlWindow) {
-    SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+    if (m_sdlWindowOwnedByUs) {
+      SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+    }
     m_sdlWindow = nullptr;
   }
+  m_glContextOwnedByUs = false;
+  m_sdlWindowOwnedByUs = false;
   if (m_sdlVideoInitializedByUs) {
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
     m_sdlVideoInitializedByUs = false;

@@ -877,44 +877,60 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_sdlWindow = nullptr;
   m_sdlWindowOwned = false;
   m_sdlRenderer = nullptr;
+  m_sdlRendererOwned = false;
   m_sdlTexture = nullptr;
 
   if (nativeWindowHandle) {
 #if defined(DIRECT_SDL2)
-    uintptr_t wndVal = reinterpret_cast<uintptr_t>(nativeWindowHandle);
-    SDL_Window* sdlWindow = nullptr;
-
-    if (wndVal > 0xFFFFFFFFUL) {
-      sdlWindow = reinterpret_cast<SDL_Window*>(nativeWindowHandle);
-      GLIDE_LOG(INFO, "Software", "Using direct SDL_Window* pointer: " << sdlWindow);
+    SDL_Window* sdlWindow = SDL_GL_GetCurrentWindow();
+    if (sdlWindow) {
+      GLIDE_LOG(INFO, "Software", "Hijacked existing SDL2 window: " << sdlWindow);
+      m_sdlWindowOwned = false;
     } else {
-      sdlWindow = SDL_CreateWindowFrom(nativeWindowHandle);
-      if (sdlWindow) {
-        m_sdlWindowOwned = true;
-        GLIDE_LOG(INFO, "Software", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << sdlWindow);
+      uintptr_t wndVal = reinterpret_cast<uintptr_t>(nativeWindowHandle);
+      if (wndVal > 0xFFFFFFFFUL) {
+        sdlWindow = reinterpret_cast<SDL_Window*>(nativeWindowHandle);
+        GLIDE_LOG(INFO, "Software", "Using direct SDL_Window* pointer: " << sdlWindow);
+        m_sdlWindowOwned = false;
       } else {
-        GLIDE_LOG(WARN, "Software", "Failed to wrap native Window ID " << wndVal << " into SDL_Window: " << SDL_GetError());
+        sdlWindow = SDL_CreateWindowFrom(nativeWindowHandle);
+        if (sdlWindow) {
+          m_sdlWindowOwned = true;
+          GLIDE_LOG(INFO, "Software", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << sdlWindow);
+        } else {
+          GLIDE_LOG(WARN, "Software", "Failed to wrap native Window ID " << wndVal << " into SDL_Window: " << SDL_GetError());
+        }
       }
     }
 
     if (sdlWindow) {
       m_sdlWindow = sdlWindow;
-      SDL_Renderer* renderer = SDL_CreateRenderer(sdlWindow, -1, SDL_RENDERER_ACCELERATED);
+      SDL_Renderer* renderer = SDL_GetRenderer(sdlWindow);
       if (renderer) {
+        GLIDE_LOG(INFO, "Software", "Hijacked existing SDL2 Renderer: " << renderer);
         m_sdlRenderer = renderer;
-        GLIDE_LOG(INFO, "Software", "Created SDL_Renderer " << renderer);
+        m_sdlRendererOwned = false;
+      } else {
+        renderer = SDL_CreateRenderer(sdlWindow, -1, SDL_RENDERER_ACCELERATED);
+        if (renderer) {
+          m_sdlRenderer = renderer;
+          m_sdlRendererOwned = true;
+          GLIDE_LOG(INFO, "Software", "Created SDL_Renderer " << renderer);
+        } else {
+          GLIDE_LOG(WARN, "Software", "Failed to create SDL_Renderer: " << SDL_GetError());
+        }
+      }
 
+      if (m_sdlRenderer) {
         SDL_Texture* texture = SDL_CreateTexture(
-            renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-            width, height);
+            reinterpret_cast<SDL_Renderer*>(m_sdlRenderer), SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, width, height);
         if (texture) {
           m_sdlTexture = texture;
           GLIDE_LOG(INFO, "Software", "Created streaming SDL_Texture (" << width << "x" << height << ") " << texture);
         } else {
           GLIDE_LOG(WARN, "Software", "Failed to create streaming SDL_Texture: " << SDL_GetError());
         }
-      } else {
-        GLIDE_LOG(WARN, "Software", "Failed to create SDL_Renderer: " << SDL_GetError());
       }
     }
 #else
@@ -1012,7 +1028,9 @@ void SoftwareBackend::DetachWindow() {
     m_sdlTexture = nullptr;
   }
   if (m_sdlRenderer) {
-    SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+    if (m_sdlRendererOwned) {
+      SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+    }
     m_sdlRenderer = nullptr;
   }
   if (m_sdlWindow) {
@@ -1021,6 +1039,7 @@ void SoftwareBackend::DetachWindow() {
     }
     m_sdlWindow = nullptr;
   }
+  m_sdlRendererOwned = false;
 #else
   m_sdlWindow = nullptr;
 #endif
