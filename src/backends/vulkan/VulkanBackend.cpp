@@ -726,21 +726,26 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     m_nativeWindow = nullptr;
 
     // 1. Extract ONLY the host Window ID using Tier B (SDL 1.2) or Tier A (SDL2)
-    void* sdl12Symbol = dlsym(RTLD_DEFAULT, "SDL_GetWMInfo");
-    if (sdl12Symbol) {
-      auto sdl12_GetWMInfo =
-          reinterpret_cast<PFN_SDL12_GetWMInfo>(sdl12Symbol);
-      SDL12_SysWMinfo wminfo{};
-      wminfo.version.major = 1;
-      wminfo.version.minor = 2;
-      wminfo.version.patch = 0;
-      if (sdl12_GetWMInfo(&wminfo) == 1) {
-        m_nativeWindow = reinterpret_cast<void*>(wminfo.info.x11.window);
-        m_nativeDisplay = wminfo.info.x11.display; // Extract the host's active Display*
-        m_nativeDisplayOwnedByUs = false;          // The host owns this connection, do not close it!
-        std::cout << "Info: Extracted host X11 Window and Display from SDL 1.2. Window="
-                  << m_nativeWindow << ", Display=" << m_nativeDisplay << std::endl;
+    bool isSdl12Host = false;
+    void* sdl12Handle = dlopen("libSDL-1.2.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (sdl12Handle) {
+      void* sdl12Symbol = dlsym(sdl12Handle, "SDL_GetWMInfo");
+      if (sdl12Symbol) {
+        auto sdl12_GetWMInfo =
+            reinterpret_cast<PFN_SDL12_GetWMInfo>(sdl12Symbol);
+        SDL12_SysWMinfo wminfo{};
+        wminfo.version.major = 1;
+        wminfo.version.minor = 2;
+        wminfo.version.patch = 0;
+        if (sdl12_GetWMInfo(&wminfo) == 1) {
+          m_nativeWindow = reinterpret_cast<void*>(wminfo.info.x11.window);
+          isSdl12Host = true;
+          GLIDE_LOG(INFO, "Vulkan",
+                    "Extracted host X11 Window from SDL 1.2. Window="
+                        << m_nativeWindow);
+        }
       }
+      dlclose(sdl12Handle);
     }
 
     if (!m_nativeWindow) {
@@ -760,23 +765,18 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       }
     }
 
-    // 2. Resolve X11 Display connection.
-    // If we successfully extracted the host's active Display pointer from SDL 1.2,
-    // we REUSE it directly to share the connection and prevent focus/grab disruptions.
-    // Otherwise, we open our own private, dedicated X11 Display connection.
-    if (!m_nativeDisplay) {
-      m_nativeDisplay = XOpenDisplay(nullptr);
-      if (m_nativeDisplay) {
-        m_nativeDisplayOwnedByUs = true;
-        GLIDE_LOG(
-            INFO, "Vulkan",
-            "Opened private, isolated X11 Display connection for blitting.");
-      } else {
-        GLIDE_LOG(CRITICAL, "Vulkan",
-                  "Failed to open private X11 Display connection!");
-      }
+    // 2. ALWAYS open our own private, dedicated X11 Display connection for blitting!
+    // This completely isolates our rendering pipeline from SDL's event connection,
+    // restoring 100% responsiveness to keyboard and mouse inputs.
+    m_nativeDisplay = XOpenDisplay(nullptr);
+    if (m_nativeDisplay) {
+      m_nativeDisplayOwnedByUs = true;
+      GLIDE_LOG(
+          INFO, "Vulkan",
+          "Opened private, isolated X11 Display connection for blitting.");
     } else {
-      std::cout << "Info: Reusing host's active X11 Display connection for cooperative presentation." << std::endl;
+      GLIDE_LOG(CRITICAL, "Vulkan",
+                "Failed to open private X11 Display connection!");
     }
 
     if (m_nativeDisplay) {
@@ -816,12 +816,17 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       int actualWidth = width;
       int actualHeight = height;
 
-      if (CreateSwapchain(actualWidth, actualHeight)) {
+      bool forceBlit = isSdl12Host;
+      if (!forceBlit && CreateSwapchain(actualWidth, actualHeight)) {
         m_headlessMode = false;
         presentationSuccess = true;
       } else {
-        GLIDE_LOG(WARN, "Vulkan",
-                  "Direct swapchain failed. Attempting X11 Blit Fallback...");
+        if (forceBlit) {
+          std::cout << "Info: SDL 1.2 host detected. Forcing X11 Blit Fallback to prevent sticky keys." << std::endl;
+        } else {
+          GLIDE_LOG(WARN, "Vulkan",
+                    "Direct swapchain failed. Attempting X11 Blit Fallback...");
+        }
 #if defined(__linux__)
         if (m_nativeDisplay && m_nativeWindow) {
           auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
@@ -863,10 +868,8 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
             m_isWindowHooked = true;  // KEEP HOOKED!
             m_sdlWindow = nullptr;    // DO NOT create a standalone window!
 
-            GLIDE_LOG(INFO, "Vulkan",
-                      "X11 Blit Fallback activated successfully. Game Resolution="
-                          << width << "x" << height << ", Depth="
-                          << m_x11Depth);
+            std::cout << "Info: X11 Blit Fallback activated successfully. Game Resolution="
+                      << width << "x" << height << ", Depth=" << m_x11Depth << std::endl;
 
             m_headlessWidth = width;
             m_headlessHeight = height;
