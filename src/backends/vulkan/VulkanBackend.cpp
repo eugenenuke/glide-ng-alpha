@@ -779,7 +779,9 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
                 "Failed to open private X11 Display connection!");
     }
 
-    if (m_nativeDisplay) {
+    bool useHeadlessBlit = isSdl12Host;
+
+    if (m_nativeDisplay && !useHeadlessBlit) {
       GLIDE_LOG(INFO, "Vulkan",
                 "Creating Vulkan Xlib surface directly from raw X11 Window...");
       vk::XlibSurfaceCreateInfoKHR xlibInfo(
@@ -793,7 +795,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
         GLIDE_LOG(CRITICAL, "Vulkan",
                   "Failed to create direct Xlib Vulkan surface: " << e.what());
       }
-    } else {
+    } else if (!m_nativeDisplay) {
       GLIDE_LOG(CRITICAL, "Vulkan",
                 "Failed to resolve X11 Display connection (all tiers failed)!");
     }
@@ -816,106 +818,94 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       int actualWidth = width;
       int actualHeight = height;
 
-      bool forceBlit = isSdl12Host;
-      if (!forceBlit && CreateSwapchain(actualWidth, actualHeight)) {
+      if (CreateSwapchain(actualWidth, actualHeight)) {
         m_headlessMode = false;
         presentationSuccess = true;
       } else {
-        if (forceBlit) {
+        useHeadlessBlit = true; // Fallback to blit if swapchain failed
+      }
+    }
+
+    if (useHeadlessBlit) {
+#if defined(__linux__)
+      if (m_nativeDisplay && m_nativeWindow) {
+        auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
+        auto win = reinterpret_cast<::Window>(
+            reinterpret_cast<uintptr_t>(m_nativeWindow)); // Use resolved untruncated window!
+
+        if (isSdl12Host) {
           std::cout << "Info: SDL 1.2 host detected. Forcing X11 Blit Fallback to prevent sticky keys." << std::endl;
         } else {
           GLIDE_LOG(WARN, "Vulkan",
                     "Direct swapchain failed. Attempting X11 Blit Fallback...");
         }
-#if defined(__linux__)
-        if (m_nativeDisplay && m_nativeWindow) {
-          auto* dpy = reinterpret_cast<Display*>(m_nativeDisplay);
-          auto win = reinterpret_cast<::Window>(
-              reinterpret_cast<uintptr_t>(m_nativeWindow)); // Use resolved untruncated window!
 
-          // 1. Force immediate synchronization to let X11 server catch up with DOSBox's window creation
-          XSync(dpy, False);
+        // 1. Force immediate synchronization to let X11 server catch up with DOSBox's window creation
+        XSync(dpy, False);
 
-          // 2. Install unified temporary error handler
-          s_x11ErrorOccurred = false;
-          auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
+        // 2. Install unified temporary error handler
+        s_x11ErrorOccurred = false;
+        auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
 
-          // 3. Query window attributes
-          XWindowAttributes attrs;
-          Status status = XGetWindowAttributes(dpy, win, &attrs);
+        // 3. Query window attributes
+        XWindowAttributes attrs;
+        Status status = XGetWindowAttributes(dpy, win, &attrs);
 
-          // 4. Create GC with graphics exposures disabled to prevent event queue flooding!
-          GC gc = nullptr;
-          if (status != 0 && !s_x11ErrorOccurred) {
-            XGCValues values;
-            values.graphics_exposures = False;
-            gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
-          }
-
-          // 5. Sync again to catch any asynchronous protocol errors from the block
-          XSync(dpy, False);
-
-          // 6. Restore original error handler
-          XSetErrorHandler(oldHandler);
-
-          // 7. If everything succeeded cleanly, activate the X11 Blit Fallback!
-          if (status != 0 && gc != nullptr && !s_x11ErrorOccurred) {
-            m_x11Visual = attrs.visual;
-            m_x11Depth = attrs.depth;
-            m_x11GC = gc;
-
-            m_useX11BlitFallback = true;
-            m_isWindowHooked = true;  // KEEP HOOKED!
-            m_sdlWindow = nullptr;    // DO NOT create a standalone window!
-
-            std::cout << "Info: X11 Blit Fallback activated successfully. Game Resolution="
-                      << width << "x" << height << ", Depth=" << m_x11Depth << std::endl;
-
-            m_headlessWidth = width;
-            m_headlessHeight = height;
-            m_realWindowWidth = attrs.width;
-            m_realWindowHeight = attrs.height;
-            m_headlessMode = true;
-
-            // Destroy the surface since swapchain failed and we won't present via Vulkan
-            m_surface.reset();
-
-            // Headless render target was already created at (width, height) in the main flow!
-            presentationSuccess = true;
-          } else {
-            GLIDE_LOG(
-                WARN, "Vulkan",
-                "X11 Blit Fallback initialization failed (window not ready or "
-                "error). Falling back to standalone window...");
-            if (gc) {
-              XFreeGC(dpy, gc);
-            }
-            isHookedFailed = true;
-            // We do NOT return false here; we let it fall through to the standalone window creation path!
-          }
-        } else {
-          isHookedFailed = true;
+        // 4. Create GC with graphics exposures disabled to prevent event queue flooding!
+        GC gc = nullptr;
+        if (status != 0 && !s_x11ErrorOccurred) {
+          XGCValues values;
+          values.graphics_exposures = False;
+          gc = XCreateGC(dpy, win, GCGraphicsExposures, &values);
         }
-#else
-        isHookedFailed = true;
-#endif
 
-        if (isHookedFailed) {
-          GLIDE_LOG(CRITICAL, "Vulkan",
-                    "Failed to create Vulkan swapchain on direct surface.");
+        // 5. Sync again to catch any asynchronous protocol errors from the block
+        XSync(dpy, False);
+
+        // 6. Restore original error handler
+        XSetErrorHandler(oldHandler);
+
+        // 7. If everything succeeded cleanly, activate the X11 Blit Fallback!
+        if (status != 0 && gc != nullptr && !s_x11ErrorOccurred) {
+          m_x11Visual = attrs.visual;
+          m_x11Depth = attrs.depth;
+          m_x11GC = gc;
+
+          m_useX11BlitFallback = true;
+          m_isWindowHooked = true;  // KEEP HOOKED!
+          m_sdlWindow = nullptr;    // DO NOT create a standalone window!
+
+          std::cout << "Info: X11 Blit Fallback activated successfully. Game Resolution="
+                    << width << "x" << height << ", Depth=" << m_x11Depth << std::endl;
+
+          m_headlessWidth = width;
+          m_headlessHeight = height;
+          m_realWindowWidth = attrs.width;
+          m_realWindowHeight = attrs.height;
+          m_headlessMode = true;
+
+          // Destroy the surface since swapchain failed or bypassed
           m_surface.reset();
-#if defined(__linux__)
-          if (m_nativeDisplay) {
-            if (m_nativeDisplayOwnedByUs) {
-              XCloseDisplay(m_nativeDisplay);
-            }
-            m_nativeDisplay = nullptr;
+
+          presentationSuccess = true;
+        } else {
+          GLIDE_LOG(
+              WARN, "Vulkan",
+              "X11 Blit Fallback initialization failed (window not ready or "
+              "error). Falling back to standalone window...");
+          if (gc) {
+            XFreeGC(dpy, gc);
           }
-          m_nativeDisplayOwnedByUs = false;
-#endif
         }
       }
-    } else {
+#endif
+    }
+
+    // Set final hooked status
+    isHookedFailed = !presentationSuccess;
+
+    if (isHookedFailed) {
+      m_surface.reset();
 #if defined(__linux__)
       if (m_nativeDisplay) {
         if (m_nativeDisplayOwnedByUs) {
@@ -925,7 +915,6 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       }
       m_nativeDisplayOwnedByUs = false;
 #endif
-      isHookedFailed = true;
     }
   }
   }
