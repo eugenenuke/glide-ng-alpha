@@ -690,7 +690,6 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
               "Bypassing SDL2 window wrapping for native window: "
                   << nativeWindowHandle);
 
-    VkSurfaceKHR rawSurface = nullptr;
     bool surfaceCreated = false;
 
 #if defined(__linux__)
@@ -1718,7 +1717,7 @@ bool VulkanBackend::SwapBuffers() {
 
     // 3. Submit GPU copy commands, waiting on image availability and signaling
     // render completion
-    m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
+    (void)m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
 
     vk::PipelineStageFlags waitStages[] = {
         vk::PipelineStageFlagBits::eTransfer};
