@@ -592,7 +592,57 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     }
   }
 
-  // --- PATH B: Standalone SDL2 Window (or Fallback if Hooked Failed) ---
+  // --- PATH A: Wrap Native Window Handle (Window Hijacking) ---
+  if (!presentationSuccess && nativeWindowHandle && !m_config.forceNoWindow) {
+    bool sdlReady = true;
+    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+      if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        GLIDE_LOG(CRITICAL, "Vulkan", "Failed to initialize SDL Video: " << SDL_GetError());
+        sdlReady = false;
+      } else {
+        m_sdlVideoInitializedByUs = true;
+      }
+    }
+
+    if (sdlReady) {
+      SDL_Window* win = nullptr;
+      uintptr_t wndVal = reinterpret_cast<uintptr_t>(nativeWindowHandle);
+      if (wndVal > 0xFFFFFFFFUL) {
+        win = reinterpret_cast<SDL_Window*>(nativeWindowHandle);
+        GLIDE_LOG(INFO, "Vulkan", "Using direct SDL_Window* pointer: " << win);
+        m_sdlWindowOwnedByUs = false;
+      } else {
+        win = SDL_CreateWindowFrom(nativeWindowHandle);
+        if (win) {
+          m_sdlWindowOwnedByUs = false; // We DO NOT own the foreign/hijacked window!
+          m_isWindowHooked = true;
+          GLIDE_LOG(INFO, "Vulkan", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << win);
+        } else {
+          GLIDE_LOG(WARN, "Vulkan", "SDL_CreateWindowFrom failed: " << SDL_GetError());
+        }
+      }
+
+      if (win) {
+        VkSurfaceKHR rawSurface = nullptr;
+        if (SDL_Vulkan_CreateSurface(win, m_instance.get(), &rawSurface)) {
+          m_surface = vk::UniqueSurfaceKHR(rawSurface, m_instance.get());
+          if (CreateSwapchain(width, height)) {
+            m_sdlWindow = win;
+            m_headlessMode = false;
+            presentationSuccess = true;
+            GLIDE_LOG(INFO, "Vulkan", "Successfully initialized Vulkan swapchain on wrapped window.");
+          } else {
+            GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan swapchain on wrapped window.");
+            m_surface.reset();
+          }
+        } else {
+          GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan surface on wrapped window: " << SDL_GetError());
+        }
+      }
+    }
+  }
+
+  // --- PATH B: Standalone SDL2 Window (Fallback) ---
   if (!presentationSuccess && !m_config.forceNoWindow) {
     bool sdlReady = true;
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
@@ -621,7 +671,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
           int actualHeight = height * scale;
           if (CreateSwapchain(actualWidth, actualHeight)) {
             m_sdlWindow = win;
-            m_sdlWindowOwnedByUs = true;
+            m_sdlWindowOwnedByUs = true; // We own the standalone window!
             m_headlessMode = false;
             presentationSuccess = true;
             GLIDE_LOG(INFO, "Vulkan",
@@ -717,7 +767,6 @@ void VulkanBackend::DetachWindow() {
   m_sdlWindowOwnedByUs = false;
 
   if (m_sdlVideoInitializedByUs) {
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
     m_sdlVideoInitializedByUs = false;
   }
   m_isWindowHooked = false;
@@ -1249,13 +1298,8 @@ bool VulkanBackend::SwapBuffers() {
                   "Polled key event: type="
                       << event.type << ", sym=" << event.key.keysym.sym
                       << ", state=" << (int)event.key.state);
-        std::cout << "[Wrapper Event Telemetry] Polled key: type=" << event.type
-                  << ", sym=" << event.key.keysym.sym
-                  << ", state=" << (int)event.key.state << std::endl;
         int res = SDL_PushEvent(&event);
         GLIDE_LOG(INFO, "Vulkan", "SDL2 SDL_PushEvent returned: " << res);
-        std::cout << "[Wrapper Event Telemetry] SDL2 push returned: " << res
-                  << std::endl;
       }
     }
   }

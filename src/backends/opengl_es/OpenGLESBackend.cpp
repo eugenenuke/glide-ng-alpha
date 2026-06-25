@@ -660,6 +660,7 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
     win = SDL_CreateWindowFrom(nativeWindowHandle);
     if (win) {
       m_isWindowHooked = true;
+      m_sdlWindowOwnedByUs = false;
       GLIDE_LOG(INFO, "GLES", "Successfully hooked native window handle.");
     } else {
       GLIDE_LOG(WARN, "GLES",
@@ -719,6 +720,7 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
                 "Attempting to re-hook native window without MSAA...");
       win = SDL_CreateWindowFrom(nativeWindowHandle);
       if (win) {
+        m_sdlWindowOwnedByUs = false;
         ctx = SDL_GL_CreateContext(win);
         if (!ctx) {
           GLIDE_LOG(WARN, "GLES",
@@ -994,7 +996,6 @@ void OpenGLESBackend::DestroyGLContext() {
   m_glContextOwnedByUs = false;
   m_sdlWindowOwnedByUs = false;
   if (m_sdlVideoInitializedByUs) {
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
     m_sdlVideoInitializedByUs = false;
   }
   m_isWindowHooked = false;

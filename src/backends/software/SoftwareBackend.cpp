@@ -758,7 +758,7 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       } else {
         sdlWindow = SDL_CreateWindowFrom(nativeWindowHandle);
         if (sdlWindow) {
-          m_sdlWindowOwned = true;
+          m_sdlWindowOwned = false; // We DO NOT own the foreign/hijacked window!
           GLIDE_LOG(INFO, "Software", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << sdlWindow);
         } else {
           GLIDE_LOG(WARN, "Software", "Failed to wrap native Window ID " << wndVal << " into SDL_Window: " << SDL_GetError());
