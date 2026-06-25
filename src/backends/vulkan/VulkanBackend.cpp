@@ -2114,6 +2114,21 @@ bool VulkanBackend::CreateInstance() {
 
   std::vector<const char*> requiredExtensions;
 
+  auto addUniqueExtension = [&requiredExtensions](const char* extName) {
+    for (const auto& ext : requiredExtensions) {
+      if (std::strcmp(ext, extName) == 0) return;
+    }
+    requiredExtensions.push_back(extName);
+  };
+
+#if defined(__linux__)
+  addUniqueExtension(VK_KHR_SURFACE_EXTENSION_NAME);
+  addUniqueExtension(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+#elif defined(_WIN32)
+  addUniqueExtension(VK_KHR_SURFACE_EXTENSION_NAME);
+  addUniqueExtension(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#endif
+
   // Load Vulkan instance extensions required by SDL2 for surface creation!
   bool shouldLoadExtensions = !m_config.forceNoWindow;
 #if defined(__linux__)
