@@ -1276,12 +1276,7 @@ bool VulkanBackend::SwapBuffers() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
-        GLIDE_LOG(INFO, "Vulkan",
-                  "Polled key event: type="
-                      << event.type << ", sym=" << event.key.keysym.sym
-                      << ", state=" << (int)event.key.state);
-        int res = SDL_PushEvent(&event);
-        GLIDE_LOG(INFO, "Vulkan", "SDL2 SDL_PushEvent returned: " << res);
+        (void)SDL_PushEvent(&event);
       }
     }
   }

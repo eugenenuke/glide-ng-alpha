@@ -109,6 +109,10 @@ class OpenGLESBackend : public SoftwareBackendBase {
   bool m_sdlVideoInitializedByUs{false};
   bool m_sdlWindowOwnedByUs{false};
   bool m_glContextOwnedByUs{false};
+  void* m_glesWindow{nullptr};     // SDL_Window* for isolated GLES context
+  void* m_sdlRenderer{nullptr};    // SDL_Renderer* for hijacked window presentation
+  bool m_sdlRendererOwned{false};  // SDL_Renderer ownership flag
+  void* m_sdlTexture{nullptr};     // SDL_Texture* for presentation blitting
 
   // GLES 3.2 presentation resources for streaming our software pixel map
   uint32_t m_glTexture{0};  // GLuint

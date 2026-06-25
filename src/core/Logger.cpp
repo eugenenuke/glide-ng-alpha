@@ -89,7 +89,7 @@ void Logger::LogExecutionSummary(const WrapperConfig& config) {
        << "\n  Target Presentation  : " << config.maxFps << " FPS"
        << "\n  AGP Bus Draw Latency : " << config.drawCallDelayUs << " us";
 
-    std::string backendPretty = "Vulkan 1.2 GPU Port";
+    std::string backendPretty = "Vulkan 1.1 GPU Port";
     if (config.backend == "opengl_es") backendPretty = "OpenGL ES 3.2 GPU Port";
     else if (config.backend == "software") backendPretty = "Host CPU Software Reference";
 

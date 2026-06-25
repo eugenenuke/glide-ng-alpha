@@ -122,6 +122,15 @@ bool JsonConfigLoader::Load(const std::string& configFilePath, WrapperConfig& ou
     }
 
     // Process Environment Overrides (Highest Priority next to app arguments)
+    if (const char* envForceNoWin = std::getenv("GLIDE_FORCE_NO_WINDOW")) {
+        outConfig.forceNoWindow = (std::string(envForceNoWin) == "1");
+        GLIDE_LOG(WARN, "Config", "Overrode forceNoWindow via GLIDE_FORCE_NO_WINDOW=" << outConfig.forceNoWindow);
+    }
+    if (const char* envHeadless = std::getenv("GLIDE_HEADLESS")) {
+        outConfig.forceNoWindow = (std::string(envHeadless) == "1");
+        GLIDE_LOG(WARN, "Config", "Overrode forceNoWindow via GLIDE_HEADLESS=" << outConfig.forceNoWindow);
+    }
+
     const char* envWrapperBackend = std::getenv("GLIDE_WRAPPER_BACKEND");
     const char* envLegacyBackend  = std::getenv("GLIDE_BACKEND");
 
