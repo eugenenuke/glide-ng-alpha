@@ -358,6 +358,9 @@ class VulkanBackend : public SoftwareBackendBase {
   bool m_isWindowHooked{false};
   bool m_sdlVideoInitializedByUs{false};
   bool m_sdlWindowOwnedByUs{false};
+  void* m_sdlRenderer{nullptr};    // SDL_Renderer*
+  bool m_sdlRendererOwned{false};  // SDL_Renderer ownership
+  void* m_sdlTexture{nullptr};     // SDL_Texture*
 
   vk::UniqueSurfaceKHR
       m_surface;  // Vulkan presentation surface associated with m_sdlWindow

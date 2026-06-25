@@ -566,34 +566,44 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_isWindowHooked = false;
   m_sdlWindow = nullptr;
   m_sdlWindowOwnedByUs = false;
+  m_sdlRenderer = nullptr;
+  m_sdlRendererOwned = false;
+  m_sdlTexture = nullptr;
   bool presentationSuccess = false;
 
-  // --- PATH 0: Hijack Active SDL2 Window FIRST (Native Wayland / X11 Safety) ---
-  SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
-  if (hijackedWin && !m_config.forceNoWindow) {
-    GLIDE_LOG(INFO, "Vulkan", "Hijacking active SDL2 window: " << hijackedWin);
-    m_sdlWindow = hijackedWin;
-    m_sdlWindowOwnedByUs = false;
-    m_isWindowHooked = true;
+  // Unconditionally run in headless mode internally!
+  m_headlessMode = true;
 
-    VkSurfaceKHR rawSurface = nullptr;
-    if (SDL_Vulkan_CreateSurface(hijackedWin, m_instance.get(), &rawSurface)) {
-      m_surface = vk::UniqueSurfaceKHR(rawSurface, m_instance.get());
-      if (CreateSwapchain(width, height)) {
-        presentationSuccess = true;
-        m_headlessMode = false;
-        GLIDE_LOG(INFO, "Vulkan", "Successfully initialized Vulkan swapchain on hijacked SDL2 window.");
-      } else {
-        GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan swapchain on hijacked SDL2 window.");
-        m_surface.reset();
-      }
+  // 1. Try to hijack active SDL2 window or wrap native handle
+  if (nativeWindowHandle && !m_config.forceNoWindow) {
+    SDL_Window* hijackedWin = SDL_GL_GetCurrentWindow();
+    if (hijackedWin) {
+      GLIDE_LOG(INFO, "Vulkan", "Hijacked existing SDL2 window: " << hijackedWin);
+      m_sdlWindow = hijackedWin;
+      m_sdlWindowOwnedByUs = false;
+      m_isWindowHooked = true;
     } else {
-      GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan surface on hijacked SDL2 window: " << SDL_GetError());
+      uintptr_t wndVal = reinterpret_cast<uintptr_t>(nativeWindowHandle);
+      if (wndVal > 0xFFFFFFFFUL) {
+        m_sdlWindow = reinterpret_cast<void*>(nativeWindowHandle);
+        GLIDE_LOG(INFO, "Vulkan", "Using direct SDL_Window* pointer: " << m_sdlWindow);
+        m_sdlWindowOwnedByUs = false;
+      } else {
+        SDL_Window* wrappedWin = SDL_CreateWindowFrom(nativeWindowHandle);
+        if (wrappedWin) {
+          m_sdlWindow = wrappedWin;
+          m_sdlWindowOwnedByUs = false; // We DO NOT own the foreign window!
+          m_isWindowHooked = true;
+          GLIDE_LOG(INFO, "Vulkan", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << wrappedWin);
+        } else {
+          GLIDE_LOG(WARN, "Vulkan", "SDL_CreateWindowFrom failed: " << SDL_GetError());
+        }
+      }
     }
   }
 
-  // --- PATH A: Wrap Native Window Handle (Window Hijacking) ---
-  if (!presentationSuccess && nativeWindowHandle && !m_config.forceNoWindow) {
+  // 2. Fallback: Create standalone window if no window was hijacked/wrapped
+  if (!m_sdlWindow && !m_config.forceNoWindow) {
     bool sdlReady = true;
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
       if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -605,99 +615,51 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     }
 
     if (sdlReady) {
-      SDL_Window* win = nullptr;
-      uintptr_t wndVal = reinterpret_cast<uintptr_t>(nativeWindowHandle);
-      if (wndVal > 0xFFFFFFFFUL) {
-        win = reinterpret_cast<SDL_Window*>(nativeWindowHandle);
-        GLIDE_LOG(INFO, "Vulkan", "Using direct SDL_Window* pointer: " << win);
-        m_sdlWindowOwnedByUs = false;
-      } else {
-        win = SDL_CreateWindowFrom(nativeWindowHandle);
-        if (win) {
-          m_sdlWindowOwnedByUs = false; // We DO NOT own the foreign/hijacked window!
-          m_isWindowHooked = true;
-          GLIDE_LOG(INFO, "Vulkan", "Wrapped native X11 Window ID " << wndVal << " into SDL_Window* " << win);
-        } else {
-          GLIDE_LOG(WARN, "Vulkan", "SDL_CreateWindowFrom failed: " << SDL_GetError());
-        }
-      }
-
+      uint32_t scale = m_config.windowScale;
+      SDL_Window* win = SDL_CreateWindow(
+          "3dfx glide-ng Presentation Console (Vulkan-Hybrid)", SDL_WINDOWPOS_CENTERED,
+          SDL_WINDOWPOS_CENTERED, width * scale, height * scale,
+          SDL_WINDOW_SHOWN);
       if (win) {
-        VkSurfaceKHR rawSurface = nullptr;
-        if (SDL_Vulkan_CreateSurface(win, m_instance.get(), &rawSurface)) {
-          m_surface = vk::UniqueSurfaceKHR(rawSurface, m_instance.get());
-          if (CreateSwapchain(width, height)) {
-            m_sdlWindow = win;
-            m_headlessMode = false;
-            presentationSuccess = true;
-            GLIDE_LOG(INFO, "Vulkan", "Successfully initialized Vulkan swapchain on wrapped window.");
-          } else {
-            GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan swapchain on wrapped window.");
-            m_surface.reset();
-          }
-        } else {
-          GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create Vulkan surface on wrapped window: " << SDL_GetError());
-        }
+        m_sdlWindow = win;
+        m_sdlWindowOwnedByUs = true;
+        m_windowShown = true;
+        GLIDE_LOG(INFO, "Vulkan", "Created standalone SDL2 window: " << win);
+      } else {
+        GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create standalone SDL2 window: " << SDL_GetError());
       }
     }
   }
 
-  // --- PATH B: Standalone SDL2 Window (Fallback) ---
-  if (!presentationSuccess && !m_config.forceNoWindow) {
-    bool sdlReady = true;
-    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
-      if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        GLIDE_LOG(WARN, "Vulkan",
-                  "SDL_Init failed: " << SDL_GetError()
-                                      << ". Running headless offscreen.");
-        sdlReady = false;
+  // 3. Create SDL2 Renderer and Streaming Texture on the window
+  if (m_sdlWindow) {
+    SDL_Window* win = reinterpret_cast<SDL_Window*>(m_sdlWindow);
+    m_sdlRenderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    if (m_sdlRenderer) {
+      m_sdlRendererOwned = true;
+      m_sdlTexture = SDL_CreateTexture(
+          reinterpret_cast<SDL_Renderer*>(m_sdlRenderer), SDL_PIXELFORMAT_ARGB8888,
+          SDL_TEXTUREACCESS_STREAMING, width, height);
+      if (m_sdlTexture) {
+        presentationSuccess = true;
+        GLIDE_LOG(INFO, "Vulkan", "Successfully initialized SDL2 presentation renderer and streaming texture (" << width << "x" << height << ").");
       } else {
-        m_sdlVideoInitializedByUs = true;
+        GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create SDL2 streaming texture: " << SDL_GetError());
       }
+    } else {
+      GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create SDL2 presentation renderer: " << SDL_GetError());
     }
 
-    if (sdlReady) {
-      uint32_t scale = m_config.windowScale;
-      SDL_Window* win = SDL_CreateWindow(
-          "3dfx glide-ng Presentation Console (Vulkan)", SDL_WINDOWPOS_CENTERED,
-          SDL_WINDOWPOS_CENTERED, width * scale, height * scale,
-          SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN);
-
-      if (win) {
-        VkSurfaceKHR rawSurface = nullptr;
-        if (SDL_Vulkan_CreateSurface(win, m_instance.get(), &rawSurface)) {
-          m_surface = vk::UniqueSurfaceKHR(rawSurface, m_instance.get());
-          int actualWidth = width * scale;
-          int actualHeight = height * scale;
-          if (CreateSwapchain(actualWidth, actualHeight)) {
-            m_sdlWindow = win;
-            m_sdlWindowOwnedByUs = true; // We own the standalone window!
-            m_headlessMode = false;
-            presentationSuccess = true;
-            GLIDE_LOG(INFO, "Vulkan",
-                      "Vulkan standalone window initialized successfully.");
-          } else {
-            GLIDE_LOG(CRITICAL, "Vulkan",
-                      "Failed to create Vulkan presentation swapchain.");
-            m_surface.reset();
-            SDL_DestroyWindow(win);
-          }
-        } else {
-          GLIDE_LOG(CRITICAL, "Vulkan",
-                    "Failed to create Vulkan surface: " << SDL_GetError());
-          SDL_DestroyWindow(win);
-        }
+    if (!presentationSuccess) {
+      if (m_sdlRenderer) {
+        SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+        m_sdlRenderer = nullptr;
       }
-
-      if (!presentationSuccess) {
-        GLIDE_LOG(INFO, "Vulkan",
-                  "Presentation setup failed. Cleaning up SDL video subsystem "
-                  "and running headless.");
-        if (m_sdlVideoInitializedByUs) {
-          SDL_QuitSubSystem(SDL_INIT_VIDEO);
-          m_sdlVideoInitializedByUs = false;
-        }
+      if (m_sdlWindowOwnedByUs) {
+        SDL_DestroyWindow(win);
       }
+      m_sdlWindow = nullptr;
+      m_sdlWindowOwnedByUs = false;
     }
   }
 
@@ -758,6 +720,14 @@ void VulkanBackend::DetachWindow() {
 
   DestroySwapchain();
   m_surface.reset();
+  if (m_sdlTexture) {
+    SDL_DestroyTexture(reinterpret_cast<SDL_Texture*>(m_sdlTexture));
+    m_sdlTexture = nullptr;
+  }
+  if (m_sdlRenderer) {
+    SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+    m_sdlRenderer = nullptr;
+  }
   if (m_sdlWindow) {
     if (m_sdlWindowOwnedByUs) {
       SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
@@ -1275,10 +1245,7 @@ bool VulkanBackend::SwapBuffers() {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_initialized || !m_windowAttached) return false;
 
-
-
-  // Flush any pending CPU LFB writes to the GPU active image before we
-  // swap/present!
+  // Flush any pending CPU LFB writes to the GPU active image before we swap/present!
   FlushLFBToGPU();
 
   // Enforce frame pacing and track frame timing using unified FrameTracker
@@ -1288,8 +1255,7 @@ bool VulkanBackend::SwapBuffers() {
 
   GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers");
 
-  // Captures keyboard inputs on our standalone window and forwards them back
-  // to the host emulator's event queue.
+  // Captures keyboard inputs on our window and forwards them back to the host emulator's event queue.
   if (m_sdlWindow) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -1321,239 +1287,94 @@ bool VulkanBackend::SwapBuffers() {
     m_inRenderPass = false;
   }
 
-  if (m_swapchain) {
-    // --- WINDOWED SWAPCHAIN PRESENTATION MODE (100% GPU-Native) ---
+  // --- HEADLESS OFFSCREEN RENDER TO CPU STAGING BUFFER ---
+  {
+    GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_Copy");
+    vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+    TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
+                          vk::ImageLayout::eColorAttachmentOptimal,
+                          vk::ImageLayout::eTransferSrcOptimal, range);
 
-    // 1. Acquire the next available presentation swapchain image index
-    uint32_t imageIndex = 0;
-    vk::Result acquireRes = m_device->acquireNextImageKHR(
-        m_swapchain.get(), UINT64_MAX,
-        m_imageAvailableSemaphores[m_currentFrameSlot].get(), nullptr,
-        &imageIndex);
+    vk::BufferImageCopy region;
+    region.imageSubresource =
+        vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+    region.imageExtent = vk::Extent3D(m_headlessWidth, m_headlessHeight, 1);
 
-    if (acquireRes == vk::Result::eErrorOutOfDateKHR) {
-      GLIDE_LOG(WARN, "Vulkan",
-                "AcquireNextImage: Swapchain is out of date. Skipped frame "
-                "presentation.");
-      return false;
-    } else if (acquireRes != vk::Result::eSuccess &&
-               acquireRes != vk::Result::eSuboptimalKHR) {
-      GLIDE_LOG(CRITICAL, "Vulkan",
-                "Failed to acquire next swapchain image: "
-                    << vk::to_string(acquireRes));
-      return false;
-    }
+    m_commandBuffer->copyImageToBuffer(
+        m_headlessImages[activeIdx].get(),
+        vk::ImageLayout::eTransferSrcOptimal,
+        m_headlessPixelBuffers[m_currentFrameSlot].get(), 1, &region);
 
-    // 2. Record GPU-to-GPU copy from our active offscreen FBO image to the
-    // acquired swapchain image
-    vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0,
-                                    1);
-
-    {
-      GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_Blit");
-      // Transition layouts: FBO to Src, Swapchain to Dst
-      TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ImageLayout::eTransferSrcOptimal, range);
-      TransitionImageLayout(*m_commandBuffer, m_swapchainImages[imageIndex],
-                            vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eTransferDstOptimal, range);
-
-      vk::ImageBlit blitRegion;
-      blitRegion.srcSubresource =
-          vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-      blitRegion.srcOffsets[0] = vk::Offset3D(0, 0, 0);
-      blitRegion.srcOffsets[1] =
-          vk::Offset3D(m_headlessWidth, m_headlessHeight, 1);
-
-      blitRegion.dstSubresource =
-          vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-      blitRegion.dstOffsets[0] = vk::Offset3D(0, 0, 0);
-      blitRegion.dstOffsets[1] =
-          vk::Offset3D(m_swapchainExtent.width, m_swapchainExtent.height, 1);
-
-      vk::Filter filter = (m_config.presentationFilter == 0)
-                              ? vk::Filter::eNearest
-                              : vk::Filter::eLinear;
-      m_commandBuffer->blitImage(
-          m_headlessImages[activeIdx].get(),
-          vk::ImageLayout::eTransferSrcOptimal, m_swapchainImages[imageIndex],
-          vk::ImageLayout::eTransferDstOptimal, 1, &blitRegion, filter);
-
-      // Transition layouts back: FBO to Attachment (for next frame draws),
-      // Swapchain to Present
-      TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
-                            vk::ImageLayout::eTransferSrcOptimal,
-                            vk::ImageLayout::eColorAttachmentOptimal, range);
-      TransitionImageLayout(*m_commandBuffer, m_swapchainImages[imageIndex],
-                            vk::ImageLayout::eTransferDstOptimal,
-                            vk::ImageLayout::ePresentSrcKHR, range);
-
-      // End command buffer recording
-      m_commandBuffer->end();
-    }
-
-    // 3. Submit GPU copy commands, waiting on image availability and signaling
-    // render completion
-    (void)m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
-
-    vk::PipelineStageFlags waitStages[] = {
-        vk::PipelineStageFlagBits::eTransfer};
-    vk::SubmitInfo submitInfo(
-        1, &m_imageAvailableSemaphores[m_currentFrameSlot].get(), waitStages, 1,
-        m_commandBuffer, 1,
-        &m_renderFinishedSemaphores[m_currentFrameSlot].get());
-
-    m_graphicsQueue.submit(submitInfo, m_fences[m_currentFrameSlot].get());
-
-    // Show the window dynamically only AFTER the first frame is fully rendered,
-    // but BEFORE it is presented! We block the CPU thread on the frame's fence
-    // to guarantee llvmpipe has completed rendering, ensuring the compositor
-    // maps a fully populated front buffer immediately and avoiding any black
-    // flash.
-    if (m_sdlWindow && !m_windowShown && !m_headlessMode && !m_isWindowHooked) {
-      try {
-        if (m_device->waitForFences(1, &m_fences[m_currentFrameSlot].get(),
-                                    VK_TRUE,
-                                    UINT64_MAX) != vk::Result::eSuccess) {
-          GLIDE_LOG(
-              WARN, "Vulkan",
-              "Failed to wait for first frame fence before showing window");
-        }
-      } catch (const std::exception& e) {
-        GLIDE_LOG(WARN, "Vulkan",
-                  "Exception waiting for first frame fence: " << e.what());
-      }
-      SDL_ShowWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
-      m_windowShown = true;
-    }
-
-    // 4. Queue the swapchain image for presentation on the screen!
-    {
-      GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_Present");
-      vk::PresentInfoKHR presentInfo(
-          1, &m_renderFinishedSemaphores[m_currentFrameSlot].get(), 1,
-          &m_swapchain.get(), &imageIndex, nullptr);
-
-      vk::Result presentRes = m_graphicsQueue.presentKHR(presentInfo);
-      if (presentRes == vk::Result::eErrorOutOfDateKHR ||
-          presentRes == vk::Result::eSuboptimalKHR) {
-        GLIDE_LOG(WARN, "Vulkan",
-                  "Present: Swapchain is out of date or suboptimal.");
-      } else if (presentRes != vk::Result::eSuccess) {
-        GLIDE_LOG(
-            CRITICAL, "Vulkan",
-            "Failed to present swapchain image: " << vk::to_string(presentRes));
-      }
-    }
-
-    // 5. Advance to the next frame slot and wait for its fence to become free
-    // before starting the next frame
-    m_currentFrameSlot = (m_currentFrameSlot + 1) % 2;
-    m_texStagingOffsets[m_currentFrameSlot] =
-        m_currentFrameSlot * m_texStagingSlotSize;
-
-    m_commandBuffer = &m_commandBuffers[m_currentFrameSlot].get();
-    {
-      GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_FenceWait");
-      if (m_device->waitForFences(1, &m_fences[m_currentFrameSlot].get(),
-                                  VK_TRUE,
-                                  UINT64_MAX) != vk::Result::eSuccess) {
-        GLIDE_LOG(CRITICAL, "Vulkan",
-                  "Failed to wait for fence of next frame slot "
-                      << m_currentFrameSlot);
-      }
-    }
-
-    m_commandBuffer->reset({});
-    m_commandBuffer->begin(vk::CommandBufferBeginInfo(
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-
-  } else {
-    // --- HEADLESS OFFSCREEN MODE (Asynchronous Staging Stash) ---
-    {
-      GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_Copy");
-      vk::ImageSubresourceRange range(vk::ImageAspectFlagBits::eColor, 0, 1, 0,
-                                      1);
-      TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
-                            vk::ImageLayout::eColorAttachmentOptimal,
-                            vk::ImageLayout::eTransferSrcOptimal, range);
-
-      vk::BufferImageCopy region;
-      region.imageSubresource =
-          vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
-      region.imageExtent = vk::Extent3D(m_headlessWidth, m_headlessHeight, 1);
-
-      m_commandBuffer->copyImageToBuffer(
-          m_headlessImages[activeIdx].get(),
-          vk::ImageLayout::eTransferSrcOptimal,
-          m_headlessPixelBuffers[m_currentFrameSlot].get(), 1, &region);
-
-      TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
-                            vk::ImageLayout::eTransferSrcOptimal,
-                            vk::ImageLayout::eColorAttachmentOptimal, range);
-    }
-
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Ending command buffer recording...");
-    m_commandBuffer->end();
-
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Resetting fence for slot "
-                  << m_currentFrameSlot << "...");
-    (void)m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
-
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Submitting command buffer...");
-    vk::SubmitInfo submitInfo(0, nullptr, nullptr, 1, m_commandBuffer);
-    m_graphicsQueue.submit(submitInfo, m_fences[m_currentFrameSlot].get());
-
-
-
-    // Advance to the next slot and setup recording immediately
-    uint32_t nextSlot = (m_currentFrameSlot + 1) % 2;
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Waiting for fence of next slot "
-                  << nextSlot << "...");
-    {
-      GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_FenceWait");
-      if (m_device->waitForFences(1, &m_fences[nextSlot].get(), VK_TRUE,
-                                  UINT64_MAX) != vk::Result::eSuccess) {
-        GLIDE_LOG(CRITICAL, "Vulkan",
-                  "Failed to wait for fence of next frame slot " << nextSlot);
-      }
-    }
-
-    m_currentFrameSlot = nextSlot;
-    m_texStagingOffsets[m_currentFrameSlot] =
-        m_currentFrameSlot * m_texStagingSlotSize;
-
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Switching to next command buffer & "
-              "resetting...");
-    m_commandBuffer = &m_commandBuffers[m_currentFrameSlot].get();
-    m_commandBuffer->reset({});
-    GLIDE_LOG(DEBUG, "Vulkan",
-              "SwapBuffers: Headless - Beginning new command buffer...");
-    m_commandBuffer->begin(vk::CommandBufferBeginInfo(
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-    GLIDE_LOG(DEBUG, "Vulkan", "SwapBuffers: Headless - Done!");
+    TransitionImageLayout(*m_commandBuffer, m_headlessImages[activeIdx].get(),
+                          vk::ImageLayout::eTransferSrcOptimal,
+                          vk::ImageLayout::eColorAttachmentOptimal, range);
   }
 
-  // 3. Swap the CPU buffer indices for double-buffering
+  m_commandBuffer->end();
+
+  (void)m_device->resetFences(1, &m_fences[m_currentFrameSlot].get());
+
+  vk::SubmitInfo submitInfo(0, nullptr, nullptr, 1, m_commandBuffer);
+  m_graphicsQueue.submit(submitInfo, m_fences[m_currentFrameSlot].get());
+
+  // Advance to the next slot and wait for its fence to complete so pixels are ready
+  uint32_t nextSlot = (m_currentFrameSlot + 1) % 2;
+  {
+    GLIDE_PROFILE_SCOPE("Vulkan::SwapBuffers_FenceWait");
+    if (m_device->waitForFences(1, &m_fences[nextSlot].get(), VK_TRUE,
+                                UINT64_MAX) != vk::Result::eSuccess) {
+      GLIDE_LOG(CRITICAL, "Vulkan",
+                "Failed to wait for fence of next frame slot " << nextSlot);
+    }
+  }
+
+  m_currentFrameSlot = nextSlot;
+  m_texStagingOffsets[m_currentFrameSlot] =
+      m_currentFrameSlot * m_texStagingSlotSize;
+
+  // --- Present the GPU staging pixels via SDL2 2D Renderer ---
+  if (m_sdlRenderer && m_sdlTexture) {
+    GLIDE_PROFILE_SCOPE("Vulkan::Sdl2Present");
+    SDL_Renderer* renderer = reinterpret_cast<SDL_Renderer*>(m_sdlRenderer);
+    SDL_Texture* texture = reinterpret_cast<SDL_Texture*>(m_sdlTexture);
+    uint32_t* texturePixels = nullptr;
+    int pitch = 0;
+    if (SDL_LockTexture(texture, nullptr, reinterpret_cast<void**>(&texturePixels), &pitch) == 0) {
+      uint32_t srcPitch = m_headlessWidth * 4;
+      uint32_t dstPitch = pitch;
+      if (srcPitch == dstPitch) {
+        std::memcpy(texturePixels, m_gpuStagingMaps[m_currentFrameSlot], srcPitch * m_headlessHeight);
+      } else {
+        for (uint32_t y = 0; y < m_headlessHeight; ++y) {
+          std::memcpy(reinterpret_cast<char*>(texturePixels) + y * dstPitch,
+                      reinterpret_cast<char*>(m_gpuStagingMaps[m_currentFrameSlot]) + y * srcPitch,
+                      srcPitch);
+        }
+      }
+      SDL_UnlockTexture(texture);
+      SDL_RenderClear(renderer);
+      SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+      SDL_RenderPresent(renderer);
+    }
+  }
+
+  m_commandBuffer = &m_commandBuffers[m_currentFrameSlot].get();
+  m_commandBuffer->reset({});
+  m_commandBuffer->begin(vk::CommandBufferBeginInfo(
+      vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
+
+  // Swap the CPU buffer indices for double-buffering (needed for LFB CPU-side tracking)
   if (m_headlessPixelMap) {
     std::swap(m_frontBufferIdx, m_backBufferIdx);
-    std::swap(
-        m_lfbBufferDirty[0],
-        m_lfbBufferDirty[1]);  // Swap dirty flags alongside buffer indices!
-    if (m_activeRenderBuffer == 0) {  // FRONTBUFFER
+    std::swap(m_lfbBufferDirty[0], m_lfbBufferDirty[1]);
+    if (m_activeRenderBuffer == 0) {
       m_headlessPixelMap = m_cpuBuffers[m_frontBufferIdx].data();
-    } else {  // BACKBUFFER
+    } else {
       m_headlessPixelMap = m_cpuBuffers[m_backBufferIdx].data();
     }
   }
 
-  // 4. Swap the GPU color targets for physical double-buffering!
+  // Swap the GPU color targets for physical double-buffering
   std::swap(m_headlessImages[0], m_headlessImages[1]);
   std::swap(m_headlessImageMemories[0], m_headlessImageMemories[1]);
   std::swap(m_headlessImageViews[0], m_headlessImageViews[1]);
