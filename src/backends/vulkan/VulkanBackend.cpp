@@ -725,47 +725,9 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     m_nativeDisplayOwnedByUs = false;
     m_nativeWindow = nullptr;
 
-    // 1. Extract ONLY the host Window ID using Tier B (SDL 1.2) or Tier A (SDL2)
-    bool isSdl12Host = false;
-    void* sdl12Handle = dlopen("libSDL-1.2.so.0", RTLD_LAZY | RTLD_NOLOAD);
-    if (sdl12Handle) {
-      void* sdl12Symbol = dlsym(sdl12Handle, "SDL_GetWMInfo");
-      if (sdl12Symbol) {
-        auto sdl12_GetWMInfo =
-            reinterpret_cast<PFN_SDL12_GetWMInfo>(sdl12Symbol);
-        SDL12_SysWMinfo wminfo{};
-        wminfo.version.major = 1;
-        wminfo.version.minor = 2;
-        wminfo.version.patch = 0;
-        if (sdl12_GetWMInfo(&wminfo) == 1) {
-          m_nativeWindow = reinterpret_cast<void*>(wminfo.info.x11.window);
-          isSdl12Host = true;
-          GLIDE_LOG(INFO, "Vulkan",
-                    "Extracted host X11 Window from SDL 1.2. Window="
-                        << m_nativeWindow);
-        }
-      }
-      dlclose(sdl12Handle);
-    }
+    m_nativeWindow = nativeWindowHandle;
 
-    if (!m_nativeWindow) {
-      SDL_Window* currentSdl2Win = SDL_GL_GetCurrentWindow();
-      if (currentSdl2Win) {
-        SDL_SysWMinfo wmInfo;
-        SDL_VERSION(&wmInfo.version);
-        if (SDL_GetWindowWMInfo(currentSdl2Win, &wmInfo)) {
-          if (wmInfo.subsystem == SDL_SYSWM_X11) {
-            m_nativeWindow = reinterpret_cast<void*>(wmInfo.info.x11.window);
-            GLIDE_LOG(
-                INFO, "Vulkan",
-                "Extracted host X11 Window from active SDL2 GL context. Window="
-                    << m_nativeWindow);
-          }
-        }
-      }
-    }
-
-    // 2. ALWAYS open our own private, dedicated X11 Display connection for blitting!
+    // 1. ALWAYS open our own private, dedicated X11 Display connection for blitting!
     // This completely isolates our rendering pipeline from SDL's event connection,
     // restoring 100% responsiveness to keyboard and mouse inputs.
     m_nativeDisplay = XOpenDisplay(nullptr);
@@ -779,7 +741,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
                 "Failed to open private X11 Display connection!");
     }
 
-    bool useHeadlessBlit = isSdl12Host;
+    bool useHeadlessBlit = true; // Always use headless blitting for raw window hooks on Linux/X11!
 
     if (m_nativeDisplay && !useHeadlessBlit) {
       GLIDE_LOG(INFO, "Vulkan",
@@ -833,12 +795,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
         auto win = reinterpret_cast<::Window>(
             reinterpret_cast<uintptr_t>(m_nativeWindow)); // Use resolved untruncated window!
 
-        if (isSdl12Host) {
-          std::cout << "Info: SDL 1.2 host detected. Forcing X11 Blit Fallback to prevent sticky keys." << std::endl;
-        } else {
-          GLIDE_LOG(WARN, "Vulkan",
-                    "Direct swapchain failed. Attempting X11 Blit Fallback...");
-        }
+        std::cout << "Info: Headless blitting active for raw window hook to prevent input lag/sticky keys." << std::endl;
 
         // 1. Force immediate synchronization to let X11 server catch up with DOSBox's window creation
         XSync(dpy, False);
