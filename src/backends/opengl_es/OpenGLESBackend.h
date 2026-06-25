@@ -110,6 +110,14 @@ class OpenGLESBackend : public SoftwareBackendBase {
   bool m_sdlWindowOwnedByUs{false};
   bool m_glContextOwnedByUs{false};
 
+#if defined(__linux__)
+  void* m_glxContext{nullptr};   // GLXContext
+  void* m_libGLHandle{nullptr};  // dlopen("libGL.so")
+  void* m_x11Display{nullptr};   // Display*
+  unsigned long m_x11Window{0};  // Window
+  bool m_x11DisplayOwned{false};
+#endif
+
   // GLES 3.2 presentation resources for streaming our software pixel map
   uint32_t m_glTexture{0};  // GLuint
   uint32_t m_glVAO{0};      // GLuint

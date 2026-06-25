@@ -810,6 +810,55 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_headlessPixelMap = m_cpuBuffers[m_backBufferIdx].data();
 
 #if defined(__linux__)
+  // Dynamic SDL 1.2 Host Detection for SDL2-based build:
+  // If we are in DIRECT_SDL2 but the host runs SDL1.2, we must force the direct X11 bypass
+  // to prevent co-existence core dumps.
+  #if defined(DIRECT_SDL2)
+  void* sdl12WM = dlsym(RTLD_DEFAULT, "SDL_GetWMInfo");
+  if (nativeWindowHandle && sdl12WM != nullptr) {
+    GLIDE_LOG(INFO, "Software", "SDL 1.2 host detected in SDL2 build. Forcing direct X11 presentation bypass.");
+    m_x11Window = reinterpret_cast<unsigned long>(nativeWindowHandle);
+    Display* dpy = XOpenDisplay(nullptr);
+    if (dpy) {
+      m_x11Display = dpy;
+      m_x11DisplayOwned = true;
+      XSync(dpy, false);
+      XWindowAttributes attrs;
+      Status status = XGetWindowAttributes(dpy, m_x11Window, &attrs);
+      if (status != 0) {
+        m_x11Visual = attrs.visual;
+        m_x11Depth = attrs.depth;
+        m_realWindowWidth = attrs.width;
+        m_realWindowHeight = attrs.height;
+        XGCValues values;
+        values.graphics_exposures = false;
+        m_x11GC = XCreateGC(dpy, m_x11Window, GCGraphicsExposures, &values);
+        if (m_x11GC) {
+          m_useX11BlitFallback = true;
+          GLIDE_LOG(INFO, "Software",
+                    "Direct X11 presentation bypass initialized successfully. Window ID="
+                        << m_x11Window << ", Resolution=" << m_realWindowWidth
+                        << "x" << m_realWindowHeight
+                        << ", Depth=" << m_x11Depth);
+        }
+      }
+      if (!m_useX11BlitFallback) {
+        XCloseDisplay(dpy);
+        m_x11Display = nullptr;
+        m_x11DisplayOwned = false;
+      }
+    }
+    if (m_useX11BlitFallback) {
+      m_windowAttached = true;
+      m_headlessWidth = width;
+      m_headlessHeight = height;
+      return true;
+    }
+  }
+  #endif
+#endif
+
+#if defined(__linux__)
   m_x11Display = nullptr;
   m_x11Window = 0;
   m_x11GC = nullptr;

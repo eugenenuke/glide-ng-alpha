@@ -922,7 +922,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   }
 
   // --- PATH B: Standalone SDL2 Window (or Fallback if Hooked Failed) ---
-  if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow) {
+  if ((!nativeWindowHandle || isHookedFailed) && !m_config.forceNoWindow && !dlsym(RTLD_DEFAULT, "SDL_GetWMInfo")) {
     if (isHookedFailed) {
       GLIDE_LOG(WARN, "Vulkan",
                 "Direct hooked binding failed. Falling back to standalone SDL2 "
@@ -1599,7 +1599,7 @@ bool VulkanBackend::SwapBuffers() {
 
   // Captures keyboard inputs on our standalone window and forwards them back
   // to the host emulator's event queue.
-  if (m_sdlWindow) {
+  if (m_sdlWindow && !m_isWindowHooked) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
