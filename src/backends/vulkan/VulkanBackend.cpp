@@ -1785,17 +1785,26 @@ bool VulkanBackend::SwapBuffers() {
           reinterpret_cast<uintptr_t>(m_nativeWindow));
 
       // 1. Lazy-initialize X11 GC and query window attributes on the very first frame!
-      // By this time, the window is guaranteed to be fully mapped and ready on the X server.
+      // Since games can swap buffers immediately after startup, we use a robust retry loop
+      // with short sleeps to wait for the X11 window to finish mapping and registering on the server.
       if (m_x11GC == nullptr) {
         GLIDE_LOG(INFO, "Vulkan", "Lazy-initializing X11 Blitter on first frame swap...");
         std::cout << "Info: Lazy-initializing X11 Blitter on first frame swap..." << std::endl;
 
-        XSync(dpy, False);
-        s_x11ErrorOccurred = false;
         auto* oldHandler = XSetErrorHandler(VulkanX11ErrorHandler);
 
         XWindowAttributes attrs{};
-        Status status = XGetWindowAttributes(dpy, win, &attrs);
+        Status status = 0;
+        for (int retry = 0; retry < 30; ++retry) {
+          s_x11ErrorOccurred = false;
+          XSync(dpy, False);
+          status = XGetWindowAttributes(dpy, win, &attrs);
+          XSync(dpy, False);
+          if (status != 0 && !s_x11ErrorOccurred) {
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
 
         GC gc = nullptr;
         if (status != 0 && !s_x11ErrorOccurred) {
