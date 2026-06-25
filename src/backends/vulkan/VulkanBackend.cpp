@@ -739,7 +739,9 @@ void VulkanBackend::DetachWindow() {
     m_sdlTexture = nullptr;
   }
   if (m_sdlRenderer) {
-    SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+    if (m_sdlRendererOwned) {
+      SDL_DestroyRenderer(reinterpret_cast<SDL_Renderer*>(m_sdlRenderer));
+    }
     m_sdlRenderer = nullptr;
   }
   if (m_sdlWindow) {
