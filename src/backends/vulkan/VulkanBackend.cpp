@@ -247,11 +247,11 @@ bool VulkanBackend::Initialize(const WrapperConfig& config) {
       {}, static_cast<uint32_t>(bindings.size()), bindings.data());
   m_descriptorSetLayout = m_device->createDescriptorSetLayoutUnique(layoutInfo);
 
-  // Create descriptor pool
+  // Create descriptor pool (raised capacity for complex games)
   std::array<vk::DescriptorPoolSize, 1> poolSizes = {
-      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 128)};
+      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 8192)};
   vk::DescriptorPoolCreateInfo poolInfo(
-      vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 128,
+      vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 4096,
       static_cast<uint32_t>(poolSizes.size()), poolSizes.data());
   m_descriptorPool = m_device->createDescriptorPoolUnique(poolInfo);
 
@@ -4125,14 +4125,15 @@ vk::DescriptorSet VulkanBackend::GetOrCreateDescriptorSet(
   DescriptorKey key{imageView0, sampler0, imageView1, sampler1};
   auto it = m_descriptorCache.find(key);
   if (it != m_descriptorCache.end()) {
-    return it->second;
+    return it->second.get();
   }
 
   // Allocate Descriptor Set
   vk::DescriptorSetAllocateInfo setAlloc(m_descriptorPool.get(), 1,
                                          &m_descriptorSetLayout.get());
-  auto sets = m_device->allocateDescriptorSets(setAlloc);
-  vk::DescriptorSet descriptorSet = sets[0];
+  auto sets = m_device->allocateDescriptorSetsUnique(setAlloc);
+  vk::UniqueDescriptorSet descriptorSet = std::move(sets[0]);
+  vk::DescriptorSet rawSet = descriptorSet.get();
 
   // Update Descriptor Set for both bindings
   std::array<vk::DescriptorImageInfo, 2> imageInfos = {
@@ -4141,17 +4142,17 @@ vk::DescriptorSet VulkanBackend::GetOrCreateDescriptorSet(
       vk::DescriptorImageInfo(sampler1, imageView1,
                               vk::ImageLayout::eShaderReadOnlyOptimal)};
   std::array<vk::WriteDescriptorSet, 2> descriptorWrites = {
-      vk::WriteDescriptorSet(descriptorSet, 0, 0, 1,
+      vk::WriteDescriptorSet(rawSet, 0, 0, 1,
                              vk::DescriptorType::eCombinedImageSampler,
                              &imageInfos[0], nullptr, nullptr),
-      vk::WriteDescriptorSet(descriptorSet, 1, 0, 1,
+      vk::WriteDescriptorSet(rawSet, 1, 0, 1,
                              vk::DescriptorType::eCombinedImageSampler,
                              &imageInfos[1], nullptr, nullptr)};
   m_device->updateDescriptorSets(static_cast<uint32_t>(descriptorWrites.size()),
                                  descriptorWrites.data(), 0, nullptr);
 
-  m_descriptorCache.emplace(key, descriptorSet);
-  return descriptorSet;
+  m_descriptorCache.emplace(key, std::move(descriptorSet));
+  return rawSet;
 }
 
 void VulkanBackend::SetTexLodBias(uint32_t tmu, float bias) {

@@ -463,7 +463,7 @@ class VulkanBackend : public SoftwareBackendBase {
 
   std::unordered_map<SamplerKey, vk::UniqueSampler, SamplerKeyHash>
       m_samplerCache;
-  std::unordered_map<DescriptorKey, vk::DescriptorSet, DescriptorKeyHash>
+  std::unordered_map<DescriptorKey, vk::UniqueDescriptorSet, DescriptorKeyHash>
       m_descriptorCache;
 
   // Persistent Texture Staging Buffer (Asynchronous Uploads)
