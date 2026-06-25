@@ -631,12 +631,26 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     }
   }
 
-  // 3. Create SDL2 Renderer and Streaming Texture on the window
+  // 3. Create or Hijack SDL2 Renderer and Streaming Texture on the window
   if (m_sdlWindow) {
     SDL_Window* win = reinterpret_cast<SDL_Window*>(m_sdlWindow);
-    m_sdlRenderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    SDL_Renderer* renderer = SDL_GetRenderer(win);
+    if (renderer) {
+      GLIDE_LOG(INFO, "Vulkan", "Hijacked existing SDL2 Renderer: " << renderer);
+      m_sdlRenderer = renderer;
+      m_sdlRendererOwned = false;
+    } else {
+      renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+      if (renderer) {
+        m_sdlRenderer = renderer;
+        m_sdlRendererOwned = true;
+        GLIDE_LOG(INFO, "Vulkan", "Created SDL_Renderer " << renderer);
+      } else {
+        GLIDE_LOG(WARN, "Vulkan", "Failed to create SDL_Renderer: " << SDL_GetError());
+      }
+    }
+
     if (m_sdlRenderer) {
-      m_sdlRendererOwned = true;
       m_sdlTexture = SDL_CreateTexture(
           reinterpret_cast<SDL_Renderer*>(m_sdlRenderer), SDL_PIXELFORMAT_ARGB8888,
           SDL_TEXTUREACCESS_STREAMING, width, height);
@@ -647,7 +661,7 @@ bool VulkanBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
         GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create SDL2 streaming texture: " << SDL_GetError());
       }
     } else {
-      GLIDE_LOG(CRITICAL, "Vulkan", "Failed to create SDL2 presentation renderer: " << SDL_GetError());
+      GLIDE_LOG(CRITICAL, "Vulkan", "Failed to resolve SDL2 presentation renderer: " << SDL_GetError());
     }
 
     if (!presentationSuccess) {
