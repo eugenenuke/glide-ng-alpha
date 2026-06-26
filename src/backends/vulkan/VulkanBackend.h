@@ -294,6 +294,7 @@ class VulkanBackend : public SoftwareBackendBase {
   bool CreateHeadlessRenderTarget(uint32_t width, uint32_t height);
   bool CreateSwapchain(uint32_t width, uint32_t height);
   void DestroySwapchain();
+  void RecreateSwapchain(uint32_t width, uint32_t height);
   uint32_t FindMemoryType(uint32_t typeFilter,
                           vk::MemoryPropertyFlags properties);
   void TransitionImageLayout(vk::CommandBuffer cmd, vk::Image image,
@@ -352,7 +353,10 @@ class VulkanBackend : public SoftwareBackendBase {
   vk::UniqueDeviceMemory m_headlessPixelMemories[2];
 
   // SDL2 Visual Presentation Console Singletons
-  void* m_sdlWindow{nullptr};  // SDL_Window*
+  void* m_sdlWindow{
+      nullptr};  // SDL_Window* (our rendering overlay or standalone window)
+  void* m_hostWindow{
+      nullptr};  // SDL_Window* (the hijacked or wrapped host window)
   void* m_nativeWindow{nullptr};
   bool m_windowShown{false};
   bool m_isWindowHooked{false};
@@ -361,6 +365,13 @@ class VulkanBackend : public SoftwareBackendBase {
   void* m_sdlRenderer{nullptr};    // SDL_Renderer*
   bool m_sdlRendererOwned{false};  // SDL_Renderer ownership
   void* m_sdlTexture{nullptr};     // SDL_Texture*
+
+  // Asynchronous bounds sync cache to prevent resize storms
+  int m_lastRequestedX{0};
+  int m_lastRequestedY{0};
+  int m_lastRequestedW{0};
+  int m_lastRequestedH{0};
+  void SyncOverlayBounds();
 
   vk::UniqueSurfaceKHR
       m_surface;  // Vulkan presentation surface associated with m_sdlWindow
@@ -460,8 +471,6 @@ class VulkanBackend : public SoftwareBackendBase {
   uint8_t m_lutR[256];
   uint8_t m_lutG[256];
   uint8_t m_lutB[256];
-
-
 };
 
 }  // namespace GlideWrapper

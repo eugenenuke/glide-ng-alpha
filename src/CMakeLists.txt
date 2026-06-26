@@ -12,6 +12,7 @@ set(CORE_SOURCES
     core/3dfParser.cpp
     core/MathUtils.cpp
     core/LfbManager.cpp
+    core/PlatformWindowUtils.cpp
     backends/SoftwareBackendBase.cpp
     backends/vulkan/VulkanBackend.cpp
     backends/opengl_es/OpenGLESBackend.cpp
@@ -39,7 +40,17 @@ add_dependencies(GlideWrapperCore CompileShaders)
 target_compile_definitions(GlideWrapperCore PUBLIC DIRECT_SDL2)
 target_link_libraries(GlideWrapperCore PUBLIC Vulkan::Vulkan SDL2::SDL2 GLESv2 OpenMP::OpenMP_CXX)
 if(UNIX AND NOT APPLE)
-    target_link_libraries(GlideWrapperCore PUBLIC X11::X11)
+    target_link_libraries(GlideWrapperCore PUBLIC X11::X11 X11::Xext)
+    # Discover Wayland Client via PkgConfig
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(WAYLAND_CLIENT wayland-client)
+        if(WAYLAND_CLIENT_FOUND)
+            target_include_directories(GlideWrapperCore PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
+            target_link_libraries(GlideWrapperCore PUBLIC ${WAYLAND_CLIENT_LIBRARIES})
+            target_compile_definitions(GlideWrapperCore PUBLIC HAVE_WAYLAND=1)
+        endif()
+    endif()
 endif()
 
 # --- TARGET 3: SDL 2.0 Direct GlideWrapperCore ---
@@ -64,7 +75,12 @@ add_dependencies(GlideWrapperCore_sdl2 CompileShaders)
 # Link directly to SDL 2.0
 target_link_libraries(GlideWrapperCore_sdl2 PUBLIC Vulkan::Vulkan SDL2::SDL2 GLESv2 OpenMP::OpenMP_CXX)
 if(UNIX AND NOT APPLE)
-    target_link_libraries(GlideWrapperCore_sdl2 PUBLIC X11::X11)
+    target_link_libraries(GlideWrapperCore_sdl2 PUBLIC X11::X11 X11::Xext)
+    if(WAYLAND_CLIENT_FOUND)
+        target_include_directories(GlideWrapperCore_sdl2 PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
+        target_link_libraries(GlideWrapperCore_sdl2 PUBLIC ${WAYLAND_CLIENT_LIBRARIES})
+        target_compile_definitions(GlideWrapperCore_sdl2 PUBLIC HAVE_WAYLAND=1)
+    endif()
 endif()
 
 

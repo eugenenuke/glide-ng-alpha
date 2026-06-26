@@ -100,6 +100,7 @@ class OpenGLESBackend : public SoftwareBackendBase {
   void SyncCullStateGLES();
   void PopulateUniforms();
   uint32_t GetActiveGpuFbo() const;
+  void SyncOverlayBounds();
 
   // SDL2 & OpenGL ES Context Handles
   void* m_sdlWindow{nullptr};  // SDL_Window*
@@ -109,10 +110,18 @@ class OpenGLESBackend : public SoftwareBackendBase {
   bool m_sdlVideoInitializedByUs{false};
   bool m_sdlWindowOwnedByUs{false};
   bool m_glContextOwnedByUs{false};
-  void* m_glesWindow{nullptr};     // SDL_Window* for isolated GLES context
-  void* m_sdlRenderer{nullptr};    // SDL_Renderer* for hijacked window presentation
+  void* m_glesWindow{nullptr};  // SDL_Window* for isolated GLES context
+  void* m_sdlRenderer{
+      nullptr};  // SDL_Renderer* for hijacked window presentation
   bool m_sdlRendererOwned{false};  // SDL_Renderer ownership flag
   void* m_sdlTexture{nullptr};     // SDL_Texture* for presentation blitting
+  void* m_hostWindow{nullptr};  // SDL_Window* tracking the hijacked host window
+
+  // Asynchronous bounds sync cache to prevent resize storms
+  int m_lastRequestedX{0};
+  int m_lastRequestedY{0};
+  int m_lastRequestedW{0};
+  int m_lastRequestedH{0};
 
   // GLES 3.2 presentation resources for streaming our software pixel map
   uint32_t m_glTexture{0};  // GLuint

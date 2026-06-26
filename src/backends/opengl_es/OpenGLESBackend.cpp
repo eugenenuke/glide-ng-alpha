@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "core/Logger.h"
+#include "core/PlatformWindowUtils.h"
 #include "core/Telemetry.h"
 #include "core/TextureManager.h"
 
@@ -151,7 +152,8 @@ bool OpenGLESBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
   m_headlessWidth = width;
   m_headlessHeight = height;
   ResetState();
-  m_headlessMode = true; // Force offscreen rendering unconditionally for hybrid presentation
+  m_headlessMode = true;  // Force offscreen rendering unconditionally for
+                          // hybrid presentation
 
   if (!CreateGLContext(nativeWindowHandle, width, height, windowed)) {
     GLIDE_LOG(CRITICAL, "GLES", "Failed to create OpenGL ES 3.2 context!");
@@ -160,50 +162,9 @@ bool OpenGLESBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
     return false;
   }
 
-  // Initialize SDL2 presentation blitter on the hijacked window (m_sdlWindow)
-  bool presentationSuccess = false;
-  m_sdlRenderer = nullptr;
-  m_sdlRendererOwned = false;
-  m_sdlTexture = nullptr;
-
-  if (m_sdlWindow && !m_config.forceNoWindow) {
-    SDL_Window* win = reinterpret_cast<SDL_Window*>(m_sdlWindow);
-    SDL_Renderer* renderer = SDL_GetRenderer(win);
-    if (renderer) {
-      GLIDE_LOG(INFO, "GLES", "Hijacked existing SDL2 Renderer: " << renderer);
-      m_sdlRenderer = renderer;
-      m_sdlRendererOwned = false;
-    } else {
-      renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-      if (renderer) {
-        m_sdlRenderer = renderer;
-        m_sdlRendererOwned = true;
-        GLIDE_LOG(INFO, "GLES", "Created SDL_Renderer " << renderer);
-      } else {
-        GLIDE_LOG(WARN, "GLES", "Failed to create SDL_Renderer: " << SDL_GetError());
-      }
-    }
-
-    if (m_sdlRenderer) {
-      m_sdlTexture = SDL_CreateTexture(
-          reinterpret_cast<SDL_Renderer*>(m_sdlRenderer), SDL_PIXELFORMAT_ABGR8888,
-          SDL_TEXTUREACCESS_STREAMING, width, height);
-      if (m_sdlTexture) {
-        presentationSuccess = true;
-        GLIDE_LOG(INFO, "GLES", "Successfully initialized SDL2 presentation renderer and streaming texture (" << width << "x" << height << ").");
-      } else {
-        GLIDE_LOG(CRITICAL, "GLES", "Failed to create SDL2 streaming texture: " << SDL_GetError());
-      }
-    } else {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to resolve SDL2 presentation renderer: " << SDL_GetError());
-    }
-
-    if (!presentationSuccess) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to initialize presentation blitter!");
-      DestroyGLContext();
-      return false;
-    }
-  }
+  // Presentation is now handled GPU-natively via glBlitFramebuffer and
+  // SDL_GL_SwapWindow in SwapBuffers. No SDL_Renderer or SDL_Texture is
+  // required on the overlay window.
 
   // Dynamic queries of the real hardware renderer!
   const char* renderer =
@@ -292,6 +253,7 @@ bool OpenGLESBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 }
 
 void OpenGLESBackend::DetachWindow() {
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_windowAttached) return;
   m_windowShown = false;
   GLIDE_LOG(INFO, "GLES",
@@ -315,6 +277,15 @@ void OpenGLESBackend::DetachWindow() {
   m_windowAttached = false;
 }
 
+void OpenGLESBackend::SyncOverlayBounds() {
+  if (m_hostWindow && m_sdlWindow) {
+    PlatformWindowUtils::SyncOverlayWindowBounds(
+        reinterpret_cast<SDL_Window*>(m_hostWindow),
+        reinterpret_cast<SDL_Window*>(m_sdlWindow), m_lastRequestedX,
+        m_lastRequestedY, m_lastRequestedW, m_lastRequestedH);
+  }
+}
+
 bool OpenGLESBackend::SwapBuffers() {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_initialized || !m_windowAttached) return false;
@@ -322,7 +293,8 @@ bool OpenGLESBackend::SwapBuffers() {
   // Flush any pending geometry batches first!
   FlushBatch();
 
-  // Proactively flush any pending CPU LFB writes to the GPU FBO before presenting/swapping!
+  // Proactively flush any pending CPU LFB writes to the GPU FBO before
+  // presenting/swapping!
   FlushLFBToGPU();
 
   // Enforce frame pacing and track frame timing using unified FrameTracker
@@ -332,38 +304,56 @@ bool OpenGLESBackend::SwapBuffers() {
 
   GLIDE_PROFILE_SCOPE("GLES::SwapBuffers");
 
-  // --- HEADLESS OFFSCREEN READBACK FROM GPU FBO ---
-  {
+  // Sync overlay window bounds with host window!
+  SyncOverlayBounds();
+
+  if (m_sdlWindow) {
+    GLIDE_PROFILE_SCOPE("GLES::SwapBuffers_GPUBlit");
+
+    // Bind default framebuffer (0) for drawing, and active FBO for reading
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_headlessFBOs[0]);
+
+    // Get actual overlay window drawable size
+    int winW = 0, winH = 0;
+    SDL_GL_GetDrawableSize(reinterpret_cast<SDL_Window*>(m_sdlWindow), &winW,
+                           &winH);
+
+    // Disable scissor test and enable all color writes to ensure the blit is
+    // not clipped or masked
+    GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissorEnabled) {
+      glDisable(GL_SCISSOR_TEST);
+    }
+    GLboolean colorMask[4];
+    glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    // Perform the blit (GPU-to-GPU copy)
+    glBlitFramebuffer(0, 0, m_headlessWidth, m_headlessHeight, 0, 0, winW, winH,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    checkGLError("SwapBuffers glBlitFramebuffer");
+
+    // Restore scissor and color mask state
+    if (scissorEnabled) {
+      glEnable(GL_SCISSOR_TEST);
+    }
+    glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+
+    // Swap the window
+    SDL_GL_SwapWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+  } else {
+    // Headless fallback
     GLIDE_PROFILE_SCOPE("GLES::SwapBuffers_Readback");
     glBindFramebuffer(GL_FRAMEBUFFER, m_headlessFBOs[0]);
-    glReadPixels(0, 0, m_headlessWidth, m_headlessHeight, GL_RGBA, GL_UNSIGNED_BYTE,
-                 m_cpuBuffers[m_backBufferIdx].data());
+    glReadPixels(0, 0, m_headlessWidth, m_headlessHeight, GL_RGBA,
+                 GL_UNSIGNED_BYTE, m_cpuBuffers[m_backBufferIdx].data());
     checkGLError("SwapBuffers glReadPixels");
   }
 
-  // --- Present the GPU staging pixels via SDL2 2D Renderer (with vertical flip) ---
-  if (m_sdlRenderer && m_sdlTexture) {
-    GLIDE_PROFILE_SCOPE("GLES::Sdl2Present");
-    SDL_Renderer* renderer = reinterpret_cast<SDL_Renderer*>(m_sdlRenderer);
-    SDL_Texture* texture = reinterpret_cast<SDL_Texture*>(m_sdlTexture);
-    void* texturePixels = nullptr;
-    int pitch = 0;
-    if (SDL_LockTexture(texture, nullptr, &texturePixels, &pitch) == 0) {
-      uint32_t srcPitch = m_headlessWidth * 4;
-      uint8_t* dstBytes = reinterpret_cast<uint8_t*>(texturePixels);
-      uint8_t* srcBytes = reinterpret_cast<uint8_t*>(m_cpuBuffers[m_backBufferIdx].data());
-      for (uint32_t y = 0; y < m_headlessHeight; ++y) {
-        uint32_t srcY = m_headlessHeight - 1 - y; // OpenGL y-axis is inverted relative to SDL2!
-        std::memcpy(dstBytes + y * pitch, srcBytes + srcY * srcPitch, srcPitch);
-      }
-      SDL_UnlockTexture(texture);
-      SDL_RenderClear(renderer);
-      SDL_RenderCopy(renderer, texture, nullptr, nullptr);
-      SDL_RenderPresent(renderer);
-    }
-  }
-
-  // Swap the front and back CPU buffer indices for double-buffering (LFB CPU-side tracking)
+  // Swap the front and back CPU buffer indices for double-buffering (LFB
+  // CPU-side tracking)
   if (m_headlessPixelMap) {
     std::swap(m_frontBufferIdx, m_backBufferIdx);
     std::swap(m_lfbBufferDirty[0], m_lfbBufferDirty[1]);
@@ -617,19 +607,44 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
   m_glesWindow = nullptr;
 
   if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+    // Dynamic Driver Isolation: Force SDL2 to use X11/XWayland if possible,
+    // to avoid Wayland co-existence conflicts with the host application's SDL3
+    // context.
+    const char* oldDriver = std::getenv("SDL_VIDEODRIVER");
+    ::setenv("SDL_VIDEODRIVER", "x11", 1);
+
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0) {
-      GLIDE_LOG(CRITICAL, "GLES",
-                "SDL_InitSubSystem failed: " << SDL_GetError());
-      return false;
+      GLIDE_LOG(WARN, "GLES",
+                "SDL_InitSubSystem with X11 driver failed: "
+                    << SDL_GetError() << ". Falling back to default driver.");
+
+      // Restore original driver environment and try again
+      if (oldDriver)
+        ::setenv("SDL_VIDEODRIVER", oldDriver, 1);
+      else
+        ::unsetenv("SDL_VIDEODRIVER");
+
+      if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0) {
+        GLIDE_LOG(CRITICAL, "GLES",
+                  "SDL_InitSubSystem fallback failed: " << SDL_GetError());
+        return false;
+      }
     }
     m_sdlVideoInitializedByUs = true;
+
+    // Restore original video driver environment to preserve host context
+    if (oldDriver)
+      ::setenv("SDL_VIDEODRIVER", oldDriver, 1);
+    else
+      ::unsetenv("SDL_VIDEODRIVER");
   }
 
   SDL_Window* win = nullptr;
   SDL_GLContext ctx = nullptr;
   m_isWindowHooked = false;
 
-  // 1. Configure OpenGL ES 3.2 context attributes (must be set before window creation)
+  // 1. Configure OpenGL ES 3.2 context attributes (must be set before window
+  // creation)
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
@@ -644,13 +659,15 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
   }
 
   if (m_config.forceNoWindow) {
-    // --- HEADLESS TEST PATH: Create a single hidden OpenGL window and bind context directly ---
+    // --- HEADLESS TEST PATH: Create a single hidden OpenGL window and bind
+    // context directly ---
     uint32_t flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
     win = SDL_CreateWindow("3dfx glide-ng Headless Context (OpenGL ES 3.2)",
                            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                            width, height, flags);
     if (!win) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to create headless GL window: " << SDL_GetError());
+      GLIDE_LOG(CRITICAL, "GLES",
+                "Failed to create headless GL window: " << SDL_GetError());
       if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
       return false;
     }
@@ -658,86 +675,101 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
 
     ctx = SDL_GL_CreateContext(win);
     if (!ctx) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to create headless GL context: " << SDL_GetError());
+      GLIDE_LOG(CRITICAL, "GLES",
+                "Failed to create headless GL context: " << SDL_GetError());
       SDL_DestroyWindow(win);
       if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
       return false;
     }
     m_glContextOwnedByUs = true;
-    m_glesWindow = nullptr; // No separate dummy window in headless mode
+    m_glesWindow = nullptr;  // No separate dummy window in headless mode
 
     if (SDL_GL_MakeCurrent(win, ctx) < 0) {
-      GLIDE_LOG(CRITICAL, "GLES", "SDL_GL_MakeCurrent failed on headless window: " << SDL_GetError());
+      GLIDE_LOG(
+          CRITICAL, "GLES",
+          "SDL_GL_MakeCurrent failed on headless window: " << SDL_GetError());
       SDL_GL_DeleteContext(ctx);
       SDL_DestroyWindow(win);
       if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
       return false;
     }
   } else {
-    // --- WINDOWED/HIJACKED PRESENTATION PATH: Separate presentation and isolated offscreen context ---
+    // --- WINDOWED/HIJACKED PRESENTATION PATH: Standalone Overlay + Direct GLES
+    // Context ---
     if (nativeWindowHandle) {
-      GLIDE_LOG(INFO, "GLES",
-                "Attempting to hook native window handle for presentation: "
-                    << nativeWindowHandle);
-      win = SDL_CreateWindowFrom(nativeWindowHandle);
-      if (win) {
+      m_hostWindow =
+          PlatformWindowUtils::HijackOrWrapWindow(nativeWindowHandle);
+      if (m_hostWindow) {
         m_isWindowHooked = true;
-        m_sdlWindowOwnedByUs = false;
-        GLIDE_LOG(INFO, "GLES", "Successfully hooked native window handle.");
-      } else {
-        GLIDE_LOG(WARN, "GLES",
-                  "SDL_CreateWindowFrom failed: "
-                      << SDL_GetError()
-                      << ". Falling back to standalone window.");
       }
     }
 
-    if (!win) {
+    if (m_hostWindow) {
+      win = PlatformWindowUtils::CreateOverlayWindow(
+          reinterpret_cast<SDL_Window*>(m_hostWindow), SDL_WINDOW_OPENGL);
+      if (win) {
+        m_sdlWindowOwnedByUs = true;
+        m_windowShown = true;
+      } else {
+        GLIDE_LOG(CRITICAL, "GLES",
+                  "Failed to create overlay window: " << SDL_GetError());
+        if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        return false;
+      }
+    } else {
+      // Standalone presentation console (no host window)
       uint32_t scale = m_config.windowScale;
-      uint32_t windowFlags = SDL_WINDOW_HIDDEN; // Will be shown dynamically
-      win = SDL_CreateWindow("3dfx glide-ng Presentation Console (OpenGL ES 3.2)",
-                             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             width * scale, height * scale, windowFlags);
-      m_sdlWindowOwnedByUs = true;
-      m_isWindowHooked = false;
+      uint32_t windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
+      win =
+          SDL_CreateWindow("3dfx glide-ng Presentation Console (OpenGL ES 3.2)",
+                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                           width * scale, height * scale, windowFlags);
+      if (win) {
+        m_sdlWindowOwnedByUs = true;
+        m_windowShown = false;
+        if (!m_config.forceNoWindow) {
+          SDL_ShowWindow(win);
+          m_windowShown = true;
+        }
+        GLIDE_LOG(INFO, "GLES",
+                  "Created standalone presentation window: " << win);
+      } else {
+        GLIDE_LOG(CRITICAL, "GLES",
+                  "Failed to create standalone presentation window: "
+                      << SDL_GetError());
+        if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        return false;
+      }
     }
 
-    if (!win) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to resolve presentation window!");
-      if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
-      return false;
+    // Cache initial overlay bounds
+    if (win) {
+      SDL_GetWindowPosition(win, &m_lastRequestedX, &m_lastRequestedY);
+      SDL_GetWindowSize(win, &m_lastRequestedW, &m_lastRequestedH);
     }
 
-    // Create GLES dummy window for isolated context
-    uint32_t dummyFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
-    SDL_Window* dummyWin = SDL_CreateWindow("GLES Offscreen Context Dummy",
-                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                           width, height, dummyFlags);
-    if (!dummyWin) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to create GLES dummy context window: " << SDL_GetError());
-      if (m_sdlWindowOwnedByUs) SDL_DestroyWindow(win);
-      if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
-      return false;
-    }
-    m_glesWindow = dummyWin;
+    m_sdlWindow = win;
+    m_glesWindow = nullptr;  // No separate dummy window!
 
-    ctx = SDL_GL_CreateContext(dummyWin);
+    // Create GLES context directly on m_sdlWindow (the overlay)
+    ctx = SDL_GL_CreateContext(win);
     if (!ctx) {
-      GLIDE_LOG(CRITICAL, "GLES", "Failed to create isolated GLES context: " << SDL_GetError());
-      SDL_DestroyWindow(dummyWin);
-      m_glesWindow = nullptr;
-      if (m_sdlWindowOwnedByUs) SDL_DestroyWindow(win);
+      GLIDE_LOG(CRITICAL, "GLES",
+                "Failed to create GLES context directly on window: "
+                    << SDL_GetError());
+      SDL_DestroyWindow(win);
+      m_sdlWindow = nullptr;
       if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
       return false;
     }
     m_glContextOwnedByUs = true;
 
-    if (SDL_GL_MakeCurrent(dummyWin, ctx) < 0) {
-      GLIDE_LOG(CRITICAL, "GLES", "SDL_GL_MakeCurrent failed on isolated dummy window: " << SDL_GetError());
+    if (SDL_GL_MakeCurrent(win, ctx) < 0) {
+      GLIDE_LOG(CRITICAL, "GLES",
+                "SDL_GL_MakeCurrent failed on window: " << SDL_GetError());
       SDL_GL_DeleteContext(ctx);
-      SDL_DestroyWindow(dummyWin);
-      m_glesWindow = nullptr;
-      if (m_sdlWindowOwnedByUs) SDL_DestroyWindow(win);
+      SDL_DestroyWindow(win);
+      m_sdlWindow = nullptr;
       if (m_sdlVideoInitializedByUs) SDL_QuitSubSystem(SDL_INIT_VIDEO);
       return false;
     }
@@ -771,9 +803,10 @@ bool OpenGLESBackend::CreateGLContext(void* nativeWindowHandle, uint32_t width,
   glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
   glGetIntegerv(GL_SAMPLES, &samples);
 
-  std::string depthStr = "D24S8"; // Default fallback
+  std::string depthStr = "D24S8";  // Default fallback
   if (depthBits > 0 || stencilBits > 0) {
-    depthStr = "D" + std::to_string(depthBits) + "S" + std::to_string(stencilBits);
+    depthStr =
+        "D" + std::to_string(depthBits) + "S" + std::to_string(stencilBits);
   }
   uint32_t samplesVal = (samples > 1) ? static_cast<uint32_t>(samples) : 0;
 
@@ -964,6 +997,8 @@ void OpenGLESBackend::DestroyGLContext() {
 
   if (m_glContext) {
     if (m_glContextOwnedByUs) {
+      // Unbind context first to avoid dangling thread-local references!
+      SDL_GL_MakeCurrent(nullptr, nullptr);
       SDL_GL_DeleteContext(reinterpret_cast<SDL_GLContext>(m_glContext));
     }
     m_glContext = nullptr;
@@ -974,15 +1009,24 @@ void OpenGLESBackend::DestroyGLContext() {
   }
   if (m_sdlWindow) {
     if (m_sdlWindowOwnedByUs) {
-      SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
+      PlatformWindowUtils::DestroyOverlayWindow(
+          reinterpret_cast<SDL_Window*>(m_sdlWindow));
     }
     m_sdlWindow = nullptr;
   }
+  m_hostWindow = nullptr;
   m_glContextOwnedByUs = false;
   m_sdlWindowOwnedByUs = false;
   if (m_sdlVideoInitializedByUs) {
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
     m_sdlVideoInitializedByUs = false;
   }
+
+  // Reset bounds sync cache
+  m_lastRequestedX = 0;
+  m_lastRequestedY = 0;
+  m_lastRequestedW = 0;
+  m_lastRequestedH = 0;
   m_isWindowHooked = false;
 }
 
