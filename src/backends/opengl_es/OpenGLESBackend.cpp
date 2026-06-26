@@ -321,12 +321,7 @@ bool OpenGLESBackend::SwapBuffers() {
 
     // Disable scissor test and enable all color writes to ensure the blit is
     // not clipped or masked
-    GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
-    if (scissorEnabled) {
-      glDisable(GL_SCISSOR_TEST);
-    }
-    GLboolean colorMask[4];
-    glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+    glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     // Perform the blit (GPU-to-GPU copy)
@@ -335,11 +330,9 @@ bool OpenGLESBackend::SwapBuffers() {
 
     checkGLError("SwapBuffers glBlitFramebuffer");
 
-    // Restore scissor and color mask state
-    if (scissorEnabled) {
-      glEnable(GL_SCISSOR_TEST);
-    }
-    glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+    // Restore scissor and color mask state from local C++ cache variables (no GPU stalls!)
+    glEnable(GL_SCISSOR_TEST);
+    ApplyColorMaskGLES();
 
     // Swap the window
     SDL_GL_SwapWindow(reinterpret_cast<SDL_Window*>(m_sdlWindow));
@@ -402,7 +395,7 @@ void OpenGLESBackend::ClearBuffer(uint32_t color, uint32_t alpha, float z,
   glBindFramebuffer(GL_FRAMEBUFFER, GetActiveGpuFbo());
 
   GLbitfield mask = 0;
-  GLboolean oldDepthMask = GL_TRUE;
+  GLboolean oldDepthMask = m_depthMask ? GL_TRUE : GL_FALSE;
 
   if (clearMask & 0x1) {  // Color Clear
     float a = ((alpha > 0) ? alpha : 255) / 255.0f;
@@ -420,7 +413,6 @@ void OpenGLESBackend::ClearBuffer(uint32_t color, uint32_t alpha, float z,
   }
 
   if (clearMask & 0x2) {  // Depth Clear
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &oldDepthMask);
     glDepthMask(GL_TRUE);  // Force depth write enabled so glClear actually
                            // clears the depth buffer!
     glClearDepthf(z);
@@ -438,16 +430,11 @@ void OpenGLESBackend::ClearBuffer(uint32_t color, uint32_t alpha, float z,
     // But Glide grBufferClear always clears the entire screen.
     // We must temporarily disable the scissor test to force a full-screen
     // clear!
-    GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
-    if (scissorEnabled) {
-      glDisable(GL_SCISSOR_TEST);
-    }
+    glDisable(GL_SCISSOR_TEST);
 
     glClear(mask);
 
-    if (scissorEnabled) {
-      glEnable(GL_SCISSOR_TEST);
-    }
+    glEnable(GL_SCISSOR_TEST);
   }
 
   if (clearMask & 0x2) {

@@ -998,7 +998,6 @@ bool SoftwareBackend::SwapBuffers() {
 
 void SoftwareBackend::DrawTriangle(const ModernVertex& a, const ModernVertex& b,
                                    const ModernVertex& c) {
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_windowAttached || !m_headlessPixelMap) return;
 
   // 1. Evaluate backface culling
@@ -1046,7 +1045,6 @@ void SoftwareBackend::DrawTriangle(const ModernVertex& a, const ModernVertex& b,
 }
 
 void SoftwareBackend::DrawLine(const ModernVertex& v1, const ModernVertex& v2) {
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_windowAttached || !m_headlessPixelMap) return;
 
   ModernVertex v1_final = v1;
@@ -1079,7 +1077,6 @@ void SoftwareBackend::DrawLine(const ModernVertex& v1, const ModernVertex& v2) {
 }
 
 void SoftwareBackend::DrawPoint(const ModernVertex& pt) {
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
   if (!m_windowAttached || !m_headlessPixelMap) return;
 
   ModernVertex pt_final = pt;
