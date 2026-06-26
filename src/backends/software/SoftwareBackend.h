@@ -120,13 +120,11 @@ class SoftwareBackend : public SoftwareBackendBase {
   uint32_t m_tileCols{0};
   uint32_t m_tileRows{0};
 
-#if defined(DIRECT_SDL2)
   void* m_sdlWindow{nullptr};    // SDL_Window*
   bool m_sdlWindowOwned{false};
   void* m_sdlRenderer{nullptr};  // SDL_Renderer*
   bool m_sdlRendererOwned{false}; // SDL_Renderer* ownership
   void* m_sdlTexture{nullptr};   // SDL_Texture*
-#endif
 };
 
 }  // namespace GlideWrapper

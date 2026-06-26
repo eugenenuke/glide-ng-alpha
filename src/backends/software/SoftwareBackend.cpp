@@ -737,7 +737,6 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
 
   m_headlessPixelMap = m_cpuBuffers[m_backBufferIdx].data();
 
-#if defined(DIRECT_SDL2)
   m_sdlWindow = nullptr;
   m_sdlWindowOwned = false;
   m_sdlRenderer = nullptr;
@@ -833,7 +832,6 @@ bool SoftwareBackend::AttachWindow(void* nativeWindowHandle, uint32_t width,
       return false;
     }
   }
-#endif
 
   m_windowAttached = true;
 
@@ -848,7 +846,6 @@ void SoftwareBackend::DetachWindow() {
     m_allocatedBuffer = false;
   }
 
-#if defined(DIRECT_SDL2)
   if (m_sdlTexture) {
     SDL_DestroyTexture(reinterpret_cast<SDL_Texture*>(m_sdlTexture));
     m_sdlTexture = nullptr;
@@ -867,7 +864,6 @@ void SoftwareBackend::DetachWindow() {
   }
   m_sdlRendererOwned = false;
   m_sdlWindowOwned = false;
-#endif
 
   m_windowAttached = false;
   m_headlessMode = false;
@@ -914,7 +910,6 @@ bool SoftwareBackend::SwapBuffers() {
     }
   }
 
-#if defined(DIRECT_SDL2)
   if (m_sdlRenderer && m_sdlTexture && !m_cpuBuffers[m_frontBufferIdx].empty()) {
     GLIDE_PROFILE_SCOPE("Software::Sdl2Present");
     SDL_Renderer* renderer = reinterpret_cast<SDL_Renderer*>(m_sdlRenderer);
@@ -997,7 +992,6 @@ bool SoftwareBackend::SwapBuffers() {
       GLIDE_LOG(WARN, "Software", "Failed to lock SDL_Texture: " << SDL_GetError());
     }
   }
-#endif
 
   return true;
 }
